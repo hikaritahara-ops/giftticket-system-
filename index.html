@@ -459,6 +459,16 @@ function getBadgeClass(judgment) {
   return 'badge-info';
 }
 
+// 利用日の表示用ヘルパー
+// used_date_confirmed(POSデータ突合済みの確定値)があればそれを最優先で表示する。
+// なければ used_date(OCR単体の読み取り値。年が不確定な仮の値)を表示するが、
+// 確定情報と誤解されないよう「(未確定)」のラベルを付与する。
+function formatUsedDate(r, plain) {
+  if (r.used_date_confirmed) return r.used_date_confirmed;
+  if (r.used_date) return plain ? r.used_date + '(未確定)' : r.used_date + '<span style="color:var(--text3);font-size:0.7em"> (未確定)</span>';
+  return plain ? '' : '—';
+}
+
 function renderTable() {
   const search = document.getElementById('search-input').value.toLowerCase();
   const dateFrom = document.getElementById('date-from').value;
@@ -512,7 +522,7 @@ function renderTable() {
             <td><span style="color:var(--text2)">${r.course_type || '—'}</span></td>
             <td>${r.store_name || '—'}</td>
             <td>${r.customer_name || '—'}</td>
-            <td class="mono" style="color:var(--text2)">${r.used_date_confirmed || r.used_date || '—'}</td>
+            <td class="mono" style="color:var(--text2)">${formatUsedDate(r)}</td>
             <td class="mono" style="color:var(--text2)">${r.expiry_date || '—'}</td>
             <td class="mono">¥${(r.face_value||0).toLocaleString()}</td>
             <td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td>
@@ -569,7 +579,7 @@ function showDetail(ticketNumber) {
     <div class="detail-item"><label>コース種別</label><span>${r.course_type||'—'}</span></div>
     <div class="detail-item"><label>店舗名</label><span>${r.store_name||'—'}</span></div>
     <div class="detail-item"><label>お客様名</label><span>${r.customer_name||'—'}</span></div>
-    <div class="detail-item"><label>利用日</label><span class="mono">${r.used_date_confirmed || r.used_date || '—'}</span></div>
+    <div class="detail-item"><label>利用日</label><span class="mono">${formatUsedDate(r)}</span></div>
     <div class="detail-item"><label>有効期限</label><span class="mono">${r.expiry_date||'—'}</span></div>
     <div class="detail-item"><label>額面金額</label><span class="mono">¥${(r.face_value||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>売上金額</label><span class="mono">¥${(r.sales_amount||0).toLocaleString()}</span></div>
@@ -602,7 +612,7 @@ function exportExcel() {
   const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','額面','売上金額','差額','判定理由','対応状況'];
   const rows = filtered.map(r => [
     r.judgment||'', r.ticket_number||'', r.course_type||'',
-    r.store_name||'', r.customer_name||'', r.used_date_confirmed || r.used_date || '', r.expiry_date||'',
+    r.store_name||'', r.customer_name||'', formatUsedDate(r, true), r.expiry_date||'',
     r.face_value||0, r.sales_amount||0, r.amount_diff||0, r.judgment_reason||'', r.status||''
   ]);
 
