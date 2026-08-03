@@ -507,6 +507,7 @@ function renderTable() {
           <th>お客様名</th>
           <th>利用日</th>
           <th>有効期限</th>
+          <th>旧料金</th>
           <th>額面</th>
           <th>売上</th>
           <th>差額</th>
@@ -524,6 +525,7 @@ function renderTable() {
             <td>${r.customer_name || '—'}</td>
             <td class="mono" style="color:var(--text2)">${formatUsedDate(r)}</td>
             <td class="mono" style="color:var(--text2)">${r.expiry_date || '—'}</td>
+            <td style="text-align:center">${r.is_green_stamp ? '🟢' : '—'}</td>
             <td class="mono">¥${(r.face_value||0).toLocaleString()}</td>
             <td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td>
             <td class="mono ${(r.amount_diff||0) > 0 ? 'amount-pos' : (r.amount_diff||0) < 0 ? 'amount-neg' : ''}">
@@ -581,6 +583,7 @@ function showDetail(ticketNumber) {
     <div class="detail-item"><label>お客様名</label><span>${r.customer_name||'—'}</span></div>
     <div class="detail-item"><label>利用日</label><span class="mono">${formatUsedDate(r)}</span></div>
     <div class="detail-item"><label>有効期限</label><span class="mono">${r.expiry_date||'—'}</span></div>
+    <div class="detail-item"><label>旧料金(緑スタンプ)</label><span>${r.is_green_stamp ? '🟢 あり' : 'なし'}</span></div>
     <div class="detail-item"><label>額面金額</label><span class="mono">¥${(r.face_value||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>売上金額</label><span class="mono">¥${(r.sales_amount||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>差額</label><span class="mono ${(r.amount_diff||0)>0?'amount-pos':''}">${r.amount_diff ? (r.amount_diff>0?'+':'')+r.amount_diff.toLocaleString() : '—'}</span></div>
@@ -609,11 +612,11 @@ function exportExcel() {
     return true;
   });
 
-  const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','額面','売上金額','差額','判定理由','対応状況'];
+  const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','旧料金','額面','売上金額','差額','判定理由','対応状況'];
   const rows = filtered.map(r => [
     r.judgment||'', r.ticket_number||'', r.course_type||'',
     r.store_name||'', r.customer_name||'', formatUsedDate(r, true), r.expiry_date||'',
-    r.face_value||0, r.sales_amount||0, r.amount_diff||0, r.judgment_reason||'', r.status||''
+    r.is_green_stamp ? '旧料金' : '', r.face_value||0, r.sales_amount||0, r.amount_diff||0, r.judgment_reason||'', r.status||''
   ]);
 
   const csv = [headers, ...rows].map(row =>
