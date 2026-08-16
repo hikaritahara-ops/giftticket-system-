@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ギフチケ照合管理システム</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --bg2: #111827;
+    --bg3: #1a2235;
+    --border: #1e2d47;
+    --accent: #3b82f6;
+    --accent2: #06b6d4;
+    --ok: #10b981;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #64748b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans JP', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 1rem; letter-spacing: 0.05em;
+  }
+  .logo-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .header-right {
+    display: flex; align-items: center; gap: 1rem;
+  }
+  .btn-config {
+    background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 0.8rem; font-family: inherit;
+    transition: all 0.2s;
+  }
+  .btn-config:hover { border-color: var(--accent); color: var(--accent); }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+  .config-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    display: none;
+  }
+  .config-panel.open { display: block; }
+  .config-panel h3 { font-size: 0.9rem; color: var(--text2); margin-bottom: 1rem; }
+  .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .config-field label { display: block; font-size: 0.75rem; color: var(--text3); margin-bottom: 4px; }
+  .config-field input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px;
+    font-family: 'DM Mono', monospace; font-size: 0.8rem;
+    outline: none; transition: border-color 0.2s;
+  }
+  .config-field input:focus { border-color: var(--accent); }
+  .btn-save {
+    margin-top: 1rem; background: var(--accent); color: white;
+    border: none; padding: 8px 20px; border-radius: 6px;
+    cursor: pointer; font-family: inherit; font-size: 0.85rem;
+    transition: opacity 0.2s;
+  }
+  .btn-save:hover { opacity: 0.85; }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .stat-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.2rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--accent); }
+  .stat-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  }
+  .stat-card.ok::before { background: var(--ok); }
+  .stat-card.warn::before { background: var(--warn); }
+  .stat-card.danger::before { background: var(--danger); }
+  .stat-card.info::before { background: var(--accent); }
+  .stat-label { font-size: 0.72rem; color: var(--text3); margin-bottom: 6px; letter-spacing: 0.05em; }
+  .stat-value { font-size: 2rem; font-weight: 700; font-family: 'DM Mono', monospace; line-height: 1; }
+  .stat-card.ok .stat-value { color: var(--ok); }
+  .stat-card.warn .stat-value { color: var(--warn); }
+  .stat-card.danger .stat-value { color: var(--danger); }
+  .stat-card.info .stat-value { color: var(--accent); }
+
+  .filters {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-tabs {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .tab {
+    padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border);
+    background: none; color: var(--text2); cursor: pointer;
+    font-size: 0.78rem; font-family: inherit; transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .tab:hover { border-color: var(--accent2); color: var(--accent2); }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .filter-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .search-input {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 12px; border-radius: 6px;
+    font-family: inherit; font-size: 0.82rem; outline: none;
+    transition: border-color 0.2s; width: 200px;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .btn-excel {
+    background: none; border: 1px solid var(--ok);
+    color: var(--ok); padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 0.78rem; font-family: inherit;
+    transition: all 0.2s; white-space: nowrap;
+  }
+  .btn-excel:hover { background: var(--ok); color: white; }
+  .btn-reload {
+    background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 0.82rem; transition: all 0.2s;
+  }
+  .btn-reload:hover { border-color: var(--accent); color: var(--accent); }
+
+  .table-wrap {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    overflow-x: auto;
+  }
+  .table-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .table-title { font-size: 0.85rem; font-weight: 500; }
+  .table-count { font-size: 0.75rem; color: var(--text3); }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; padding: 10px 16px;
+    font-size: 0.72rem; color: var(--text3);
+    letter-spacing: 0.08em; text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg3);
+    cursor: pointer; user-select: none;
+    white-space: nowrap;
+  }
+  th:hover { color: var(--text2); }
+  td {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-size: 0.82rem; vertical-align: middle;
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(59,130,246,0.04); }
+  .mono { font-family: 'DM Mono', monospace; font-size: 0.78rem; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 20px; font-size: 0.72rem;
+    font-weight: 500; white-space: nowrap;
+  }
+  .badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .badge-ok { background: rgba(16,185,129,0.12); color: var(--ok); }
+  .badge-ok::before { background: var(--ok); }
+  .badge-warn { background: rgba(245,158,11,0.12); color: var(--warn); }
+  .badge-warn::before { background: var(--warn); }
+  .badge-danger { background: rgba(239,68,68,0.12); color: var(--danger); }
+  .badge-danger::before { background: var(--danger); }
+  .badge-info { background: rgba(59,130,246,0.12); color: var(--accent); }
+  .badge-info::before { background: var(--accent); }
+  .badge-gray { background: rgba(100,116,139,0.15); color: var(--text3); }
+  .badge-gray::before { background: var(--text3); }
+
+  .status-select {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 8px; border-radius: 5px;
+    font-family: inherit; font-size: 0.75rem; outline: none; cursor: pointer;
+  }
+
+  .loading {
+    text-align: center; padding: 4rem;
+    color: var(--text3); font-size: 0.85rem;
+  }
+  .loading-spinner {
+    width: 32px; height: 32px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 1rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty {
+    text-align: center; padding: 4rem;
+    color: var(--text3); font-size: 0.85rem;
+  }
+  .empty-icon { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.4; }
+
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+    z-index: 200; display: none; align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 2rem; max-width: 600px; width: 90%;
+    max-height: 80vh; overflow-y: auto;
+  }
+  .modal h3 { font-size: 1rem; margin-bottom: 1.5rem; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+  .detail-item label { display: block; font-size: 0.7rem; color: var(--text3); margin-bottom: 2px; }
+  .detail-item span { font-size: 0.85rem; }
+  .modal-close {
+    margin-top: 1.5rem; background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 8px 20px; border-radius: 6px;
+    cursor: pointer; font-family: inherit; font-size: 0.82rem;
+    transition: all 0.2s;
+  }
+  .modal-close:hover { border-color: var(--danger); color: var(--danger); }
+
+  .toast {
+    position: fixed; bottom: 2rem; right: 2rem; z-index: 300;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 20px;
+    font-size: 0.82rem; color: var(--text);
+    transform: translateY(100px); opacity: 0;
+    transition: all 0.3s; max-width: 300px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-left: 3px solid var(--ok); }
+  .toast.error { border-left: 3px solid var(--danger); }
+
+  .amount-pos { color: var(--danger); }
+  .amount-neg { color: var(--ok); }
+
+  .link { color: var(--accent2); text-decoration: none; font-size: 0.75rem; }
+  .link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    ギフチケ照合管理システム
+  </div>
+  <div class="header-right">
+    <span id="last-updated" style="font-size:0.72rem;color:var(--text3)"></span>
+    <button class="btn-config" onclick="toggleConfig()">⚙ 設定</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="config-panel" id="config-panel">
+    <h3>Supabase 接続設定</h3>
+    <div class="config-grid">
+      <div class="config-field">
+        <label>Project URL</label>
+        <input type="text" id="supabase-url" placeholder="https://xxxx.supabase.co">
+      </div>
+      <div class="config-field">
+        <label>Publishable Key (anon key)</label>
+        <input type="text" id="supabase-key" placeholder="sb_publishable_...">
+      </div>
+    </div>
+    <button class="btn-save" onclick="saveConfig()">保存して接続</button>
+  </div>
+
+  <div class="stats-grid" id="stats-grid">
+    <div class="stat-card info">
+      <div class="stat-label">総件数</div>
+      <div class="stat-value" id="stat-total">—</div>
+    </div>
+    <div class="stat-card ok">
+      <div class="stat-label">正規の券</div>
+      <div class="stat-value" id="stat-ok">—</div>
+    </div>
+    <div class="stat-card warn">
+      <div class="stat-label">要確認</div>
+      <div class="stat-value" id="stat-warn">—</div>
+    </div>
+    <div class="stat-card danger">
+      <div class="stat-label">期限切れ使用</div>
+      <div class="stat-value" id="stat-expired">—</div>
+    </div>
+    <div class="stat-card danger">
+      <div class="stat-label">読取不能</div>
+      <div class="stat-value" id="stat-unread">—</div>
+    </div>
+  </div>
+
+  <div class="filters">
+    <div class="filter-tabs" id="filter-tabs">
+      <button class="tab active" data-filter="all" onclick="setFilter('all',this)">すべて</button>
+      <button class="tab" data-filter="正規の券" onclick="setFilter('正規の券',this)">✅ 正規の券</button>
+      <button class="tab" data-filter="要確認" onclick="setFilter('要確認',this)">⚠️ 要確認</button>
+      <button class="tab" data-filter="期限切れ使用" onclick="setFilter('期限切れ使用',this)">⏰ 期限切れ使用</button>
+      <button class="tab" data-filter="読取不能" onclick="setFilter('読取不能',this)">読取不能</button>
+    </div>
+    <div class="filter-right">
+      <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable()">
+      <input type="date" class="search-input" id="date-from" style="width:140px" onchange="renderTable()">
+      <span style="color:var(--text3);font-size:0.8rem">〜</span>
+      <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable()">
+      <button class="btn-reload" onclick="loadData()">↻</button>
+      <button class="btn-excel" onclick="exportExcel()">📊 Excel出力</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <span class="table-title">照合結果一覧</span>
+      <span class="table-count" id="table-count">0件</span>
+    </div>
+    <div id="table-body">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        データを読み込み中...
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">詳細</h3>
+    <div class="detail-grid" id="modal-content"></div>
+    <button class="modal-close" onclick="closeModal()">閉じる</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// 固定の接続情報(誰がどのアカウントで開いても自動的に接続されます)
+const DEFAULT_SUPABASE_URL = 'https://nyziybuxchsicnfkujij.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_faUfMhKJTFPTaeFHeE8Z6A_qo23Wutl';
+
+let allData = [];
+let currentFilter = 'all';
+let SUPABASE_URL = localStorage.getItem('supabase_url') || DEFAULT_SUPABASE_URL;
+let SUPABASE_KEY = localStorage.getItem('supabase_key') || DEFAULT_SUPABASE_KEY;
+
+window.onload = () => {
+  document.getElementById('supabase-url').value = SUPABASE_URL;
+  document.getElementById('supabase-key').value = SUPABASE_KEY;
+  loadData();
+};
+
+function toggleConfig() {
+  document.getElementById('config-panel').classList.toggle('open');
+}
+
+function saveConfig() {
+  SUPABASE_URL = document.getElementById('supabase-url').value.trim();
+  SUPABASE_KEY = document.getElementById('supabase-key').value.trim();
+  if (!SUPABASE_URL || !SUPABASE_KEY) { showToast('URLとKeyを入力してください', 'error'); return; }
+  localStorage.setItem('supabase_url', SUPABASE_URL);
+  localStorage.setItem('supabase_key', SUPABASE_KEY);
+  document.getElementById('config-panel').classList.remove('open');
+  showToast('接続設定を保存しました', 'success');
+  loadData();
+}
+
+async function loadData() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  document.getElementById('table-body').innerHTML = '<div class="loading"><div class="loading-spinner"></div>データを読み込み中...</div>';
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=*&order=used_date.desc&limit=500&apikey=${SUPABASE_KEY}`, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    allData = await res.json();
+    updateStats();
+    renderTable();
+    document.getElementById('last-updated').textContent = `最終更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+    showToast(`${allData.length}件読み込みました`, 'success');
+  } catch(e) {
+    document.getElementById('table-body').innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div>接続エラー: ${e.message}<br><small style="color:var(--text3)">設定を確認してください</small></div>`;
+    showToast('接続エラー: ' + e.message, 'error');
+  }
+}
+
+function updateStats() {
+  const counts = {ok:0, warn:0, expired:0, unread:0};
+  allData.forEach(r => {
+    const j = r.judgment || '';
+    if (j === '正規の券' || j === 'OK') counts.ok++;
+    else if (j === '期限切れ使用') counts.expired++;
+    else if (j === '読取不能') counts.unread++;
+    else if (j.includes('確認')) counts.warn++;
+  });
+  document.getElementById('stat-total').textContent = allData.length;
+  document.getElementById('stat-ok').textContent = counts.ok;
+  document.getElementById('stat-warn').textContent = counts.warn;
+  document.getElementById('stat-expired').textContent = counts.expired;
+  document.getElementById('stat-unread').textContent = counts.unread;
+}
+
+function setFilter(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  renderTable();
+}
+
+function getBadgeClass(judgment) {
+  if (!judgment) return 'badge-gray';
+  if (judgment === '正規の券' || judgment === 'OK') return 'badge-ok';
+  if (judgment === '期限切れ使用' || judgment === '読取不能') return 'badge-danger';
+  if (judgment.includes('確認')) return 'badge-warn';
+  return 'badge-info';
+}
+
+// 利用日の表示用ヘルパー
+// used_date_confirmed(POSデータ突合済みの確定値)があればそれを最優先で表示する。
+// なければ used_date(OCR単体の読み取り値。年が不確定な仮の値)を表示するが、
+// 確定情報と誤解されないよう「(未確定)」のラベルを付与する。
+function formatUsedDate(r, plain) {
+  if (r.used_date_confirmed) return r.used_date_confirmed;
+  if (r.used_date) return plain ? r.used_date + '(未確定)' : r.used_date + '<span style="color:var(--text3);font-size:0.7em"> (未確定)</span>';
+  return plain ? '' : '—';
+}
+
+// お客様名の表示用ヘルパー
+// POSデータで「一致」が確定していない限り、OCRの読み取り値をそのまま正式表示しない。
+// 未確定の場合は「(未確定)」のラベルを付与する。
+function formatCustomerName(r, plain) {
+  if (!r.customer_name) return plain ? '' : '—';
+  if (r.pos_match_status === '一致') return r.customer_name;
+  return plain ? r.customer_name + '(未確定)' : r.customer_name + '<span style="color:var(--text3);font-size:0.7em"> (未確定)</span>';
+}
+
+function renderTable() {
+  const search = document.getElementById('search-input').value.toLowerCase();
+  const dateFrom = document.getElementById('date-from').value;
+  const dateTo = document.getElementById('date-to').value;
+
+  let filtered = allData.filter(r => {
+    if (currentFilter !== 'all') {
+      const j = r.judgment || '';
+      if (j !== currentFilter) return false;
+    }
+    if (search) {
+      const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
+      if (!s.includes(search)) return false;
+    }
+    const usedDate = r.used_date_confirmed || r.used_date || '';
+    if (dateFrom && usedDate && usedDate < dateFrom) return false;
+    if (dateTo && usedDate && usedDate > dateTo) return false;
+    return true;
+  });
+
+  document.getElementById('table-count').textContent = `${filtered.length}件`;
+
+  if (filtered.length === 0) {
+    document.getElementById('table-body').innerHTML = '<div class="empty"><div class="empty-icon">🔍</div>該当するデータがありません</div>';
+    return;
+  }
+
+  const html = `
+    <table>
+      <thead>
+        <tr>
+          <th>判定</th>
+          <th>券番号</th>
+          <th>コース</th>
+          <th>店舗</th>
+          <th>お客様名</th>
+          <th>利用日</th>
+          <th>有効期限</th>
+          <th>旧料金</th>
+          <th>額面</th>
+          <th>売上</th>
+          <th>差額</th>
+          <th>対応状況</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${filtered.map(r => `
+          <tr>
+            <td><span class="badge ${getBadgeClass(r.judgment)}">${r.judgment || '—'}</span></td>
+            <td class="mono">${r.ticket_number || '—'}</td>
+            <td><span style="color:var(--text2)">${r.course_type || '—'}</span></td>
+            <td>${r.store_name || '—'}</td>
+            <td>${formatCustomerName(r)}</td>
+            <td class="mono" style="color:var(--text2)">${formatUsedDate(r)}</td>
+            <td class="mono" style="color:var(--text2)">${r.expiry_date || '—'}</td>
+            <td style="text-align:center">${r.is_green_stamp ? '🟢' : '—'}</td>
+            <td class="mono">¥${(r.face_value||0).toLocaleString()}</td>
+            <td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td>
+            <td class="mono ${(r.amount_diff||0) > 0 ? 'amount-pos' : (r.amount_diff||0) < 0 ? 'amount-neg' : ''}">
+              ${r.amount_diff ? (r.amount_diff > 0 ? '+' : '') + r.amount_diff.toLocaleString() : '—'}
+            </td>
+            <td>
+              <select class="status-select" onchange="updateStatus('${r.ticket_number}', this.value)">
+                <option ${r.status==='未対応'?'selected':''}>未対応</option>
+                <option ${r.status==='確認中'?'selected':''}>確認中</option>
+                <option ${r.status==='対応済'?'selected':''}>対応済</option>
+              </select>
+            </td>
+            <td>
+              <button onclick="showDetail('${r.ticket_number}')" style="background:none;border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:5px;cursor:pointer;font-size:0.75rem;transition:all 0.2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">詳細</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+  document.getElementById('table-body').innerHTML = html;
+}
+
+async function updateStatus(ticketNumber, status) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ status })
+    });
+    if (res.ok) {
+      const idx = allData.findIndex(r => r.ticket_number === ticketNumber);
+      if (idx >= 0) allData[idx].status = status;
+      showToast('対応状況を更新しました', 'success');
+    }
+  } catch(e) { showToast('更新エラー', 'error'); }
+}
+
+function showDetail(ticketNumber) {
+  const r = allData.find(d => d.ticket_number === ticketNumber);
+  if (!r) return;
+  document.getElementById('modal-title').textContent = `詳細 — ${r.ticket_number || ''}`;
+  document.getElementById('modal-content').innerHTML = `
+    <div class="detail-item"><label>判定</label><span><span class="badge ${getBadgeClass(r.judgment)}">${r.judgment||'—'}</span></span></div>
+    <div class="detail-item"><label>対応状況</label><span>${r.status||'—'}</span></div>
+    <div class="detail-item"><label>券番号</label><span class="mono">${r.ticket_number||'—'}</span></div>
+    <div class="detail-item"><label>コース種別</label><span>${r.course_type||'—'}</span></div>
+    <div class="detail-item"><label>店舗名</label><span>${r.store_name||'—'}</span></div>
+    <div class="detail-item"><label>お客様名</label><span>${formatCustomerName(r)}</span></div>
+    <div class="detail-item"><label>利用日</label><span class="mono">${formatUsedDate(r)}</span></div>
+    <div class="detail-item"><label>有効期限</label><span class="mono">${r.expiry_date||'—'}</span></div>
+    <div class="detail-item"><label>旧料金(緑スタンプ)</label><span>${r.is_green_stamp ? '🟢 あり' : 'なし'}</span></div>
+    <div class="detail-item"><label>額面金額</label><span class="mono">¥${(r.face_value||0).toLocaleString()}</span></div>
+    <div class="detail-item"><label>売上金額</label><span class="mono">¥${(r.sales_amount||0).toLocaleString()}</span></div>
+    <div class="detail-item"><label>差額</label><span class="mono ${(r.amount_diff||0)>0?'amount-pos':''}">${r.amount_diff ? (r.amount_diff>0?'+':'')+r.amount_diff.toLocaleString() : '—'}</span></div>
+    <div class="detail-item"><label>判定理由</label><span>${r.judgment_reason||'—'}</span></div>
+    <div class="detail-item" style="grid-column:1/-1"><label>ファイルURL</label><span>${r.file_url ? `<a href="${r.file_url}" target="_blank" class="link">📎 画像を開く</a>` : '—'}</span></div>
+  `;
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+document.getElementById('modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal')) closeModal();
+});
+
+function exportExcel() {
+  const search = document.getElementById('search-input').value.toLowerCase();
+  let filtered = allData.filter(r => {
+    if (currentFilter !== 'all' && (r.judgment||'') !== currentFilter) return false;
+    if (search) {
+      const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
+      if (!s.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','旧料金','額面','売上金額','差額','判定理由','対応状況'];
+  const rows = filtered.map(r => [
+    r.judgment||'', r.ticket_number||'', r.course_type||'',
+    r.store_name||'', formatCustomerName(r, true), formatUsedDate(r, true), r.expiry_date||'',
+    r.is_green_stamp ? '旧料金' : '', r.face_value||0, r.sales_amount||0, r.amount_diff||0, r.judgment_reason||'', r.status||''
+  ]);
+
+  const csv = [headers, ...rows].map(row =>
+    row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')
+  ).join('\n');
+
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ギフチケ照合_${new Date().toLocaleDateString('ja-JP').replace(/\//g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Excelファイルを出力しました', 'success');
+}
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
