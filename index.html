@@ -140,6 +140,7 @@
   }
   .tab:hover { border-color: var(--accent2); color: var(--accent2); }
   .tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .tab.archive-tab.active { background: var(--text3); border-color: var(--text3); }
   .filter-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   .search-input {
     background: var(--bg3); border: 1px solid var(--border);
@@ -276,6 +277,21 @@
 
   .link { color: var(--accent2); text-decoration: none; font-size: 0.75rem; }
   .link:hover { text-decoration: underline; }
+
+  .btn-archive {
+    background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 4px 10px; border-radius: 5px;
+    cursor: pointer; font-size: 0.75rem; transition: all 0.2s;
+    margin-left: 4px;
+  }
+  .btn-archive:hover { border-color: var(--danger); color: var(--danger); }
+  .btn-restore {
+    background: none; border: 1px solid var(--accent);
+    color: var(--accent); padding: 4px 10px; border-radius: 5px;
+    cursor: pointer; font-size: 0.75rem; transition: all 0.2s;
+    margin-left: 4px;
+  }
+  .btn-restore:hover { background: var(--accent); color: white; }
 </style>
 </head>
 <body>
@@ -338,6 +354,7 @@
       <button class="tab" data-filter="要確認" onclick="setFilter('要確認',this)">⚠️ 要確認</button>
       <button class="tab" data-filter="期限切れ使用" onclick="setFilter('期限切れ使用',this)">⏰ 期限切れ使用</button>
       <button class="tab" data-filter="読取不能" onclick="setFilter('読取不能',this)">読取不能</button>
+      <button class="tab archive-tab" data-filter="archived" onclick="setFilter('archived',this)">🗑 アーカイブ</button>
     </div>
     <div class="filter-right">
       <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable()">
@@ -429,15 +446,16 @@ async function loadData() {
 }
 
 function updateStats() {
+  const activeData = allData.filter(r => !r.archived);
   const counts = {ok:0, warn:0, expired:0, unread:0};
-  allData.forEach(r => {
+  activeData.forEach(r => {
     const j = r.judgment || '';
     if (j === '正規の券' || j === 'OK') counts.ok++;
     else if (j === '期限切れ使用') counts.expired++;
     else if (j === '読取不能') counts.unread++;
     else if (j.includes('確認')) counts.warn++;
   });
-  document.getElementById('stat-total').textContent = allData.length;
+  document.getElementById('stat-total').textContent = activeData.length;
   document.getElementById('stat-ok').textContent = counts.ok;
   document.getElementById('stat-warn').textContent = counts.warn;
   document.getElementById('stat-expired').textContent = counts.expired;
@@ -459,14 +477,12 @@ function getBadgeClass(judgment) {
   return 'badge-info';
 }
 
-// 利用日の表示用ヘルパー
 function formatUsedDate(r, plain) {
   if (r.used_date_confirmed) return r.used_date_confirmed;
   if (r.used_date) return plain ? r.used_date + '(未確定)' : r.used_date + '<span style="color:var(--text3);font-size:0.7em"> (未確定)</span>';
   return plain ? '' : '—';
 }
 
-// お客様名の表示用ヘルパー
 function formatCustomerName(r, plain) {
   if (!r.customer_name) return plain ? '' : '—';
   if (r.pos_match_status === '一致') return r.customer_name;
@@ -479,9 +495,14 @@ function renderTable() {
   const dateTo = document.getElementById('date-to').value;
 
   let filtered = allData.filter(r => {
-    if (currentFilter !== 'all') {
-      const j = r.judgment || '';
-      if (j !== currentFilter) return false;
+    if (currentFilter === 'archived') {
+      if (!r.archived) return false;
+    } else {
+      if (r.archived) return false;
+      if (currentFilter !== 'all') {
+        const j = r.judgment || '';
+        if (j !== currentFilter) return false;
+      }
     }
     if (search) {
       const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
@@ -499,6 +520,8 @@ function renderTable() {
     document.getElementById('table-body').innerHTML = '<div class="empty"><div class="empty-icon">🔍</div>該当するデータがありません</div>';
     return;
   }
+
+  const isArchiveView = currentFilter === 'archived';
 
   const html = `
     <table>
@@ -544,6 +567,10 @@ function renderTable() {
             </td>
             <td>
               <button onclick="showDetail('${r.ticket_number}')" style="background:none;border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:5px;cursor:pointer;font-size:0.75rem;transition:all 0.2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">詳細</button>
+              ${isArchiveView
+                ? `<button class="btn-restore" onclick="restoreRow('${r.ticket_number}')">戻す</button>`
+                : `<button class="btn-archive" onclick="archiveRow('${r.ticket_number}')">アーカイブ</button>`
+              }
             </td>
           </tr>
         `).join('')}
@@ -572,6 +599,39 @@ async function updateStatus(ticketNumber, status) {
       showToast('対応状況を更新しました', 'success');
     }
   } catch(e) { showToast('更新エラー', 'error'); }
+}
+
+async function setArchived(ticketNumber, archived) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ archived })
+    });
+    if (res.ok) {
+      const idx = allData.findIndex(r => r.ticket_number === ticketNumber);
+      if (idx >= 0) allData[idx].archived = archived;
+      updateStats();
+      renderTable();
+      showToast(archived ? 'アーカイブに移動しました' : '一覧に戻しました', 'success');
+    } else {
+      showToast('更新エラー', 'error');
+    }
+  } catch(e) { showToast('更新エラー: ' + e.message, 'error'); }
+}
+
+function archiveRow(ticketNumber) {
+  setArchived(ticketNumber, true);
+}
+
+function restoreRow(ticketNumber) {
+  setArchived(ticketNumber, false);
 }
 
 function showDetail(ticketNumber) {
@@ -608,7 +668,8 @@ document.getElementById('modal').addEventListener('click', e => {
 function exportExcel() {
   const search = document.getElementById('search-input').value.toLowerCase();
   let filtered = allData.filter(r => {
-    if (currentFilter !== 'all' && (r.judgment||'') !== currentFilter) return false;
+    if (r.archived) return false;
+    if (currentFilter !== 'all' && currentFilter !== 'archived' && (r.judgment||'') !== currentFilter) return false;
     if (search) {
       const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
       if (!s.includes(search)) return false;
