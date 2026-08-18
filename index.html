@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ギフチケ照合管理システム</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -58,7 +59,26 @@
   }
   .btn-config:hover { border-color: var(--accent); color: var(--accent); }
 
+  /* メインナビ(3タブ) */
+  .main-nav {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; gap: 4px;
+    position: sticky; top: 60px; z-index: 99;
+  }
+  .main-nav-tab {
+    background: none; border: none; color: var(--text3);
+    padding: 14px 20px; cursor: pointer; font-family: inherit;
+    font-size: 0.85rem; font-weight: 500; border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .main-nav-tab:hover { color: var(--text2); }
+  .main-nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
   .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+  .page { display: none; }
+  .page.active { display: block; }
 
   .config-panel {
     background: var(--bg2);
@@ -292,6 +312,111 @@
     margin-left: 4px;
   }
   .btn-restore:hover { background: var(--accent); color: white; }
+
+  /* 取り込みページ共通 */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin-bottom: 1.5rem;
+  }
+  .card h2 {
+    font-size: 0.95rem;
+    color: var(--text2);
+    margin-bottom: 1rem;
+    display: flex; align-items: center; gap: 8px;
+    justify-content: space-between;
+  }
+  .card h2 .left { display: flex; align-items: center; gap: 8px; }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: white;
+    font-size: 0.75rem; font-weight: 700;
+  }
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 3rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--text2);
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(59,130,246,0.05);
+    color: var(--accent);
+  }
+  .dropzone .icon { font-size: 2rem; margin-bottom: 0.5rem; }
+  .dropzone small { display: block; margin-top: 6px; color: var(--text3); }
+  input[type=file] { display: none; }
+  .stats-row { display: flex; gap: 1rem; margin: 1rem 0; flex-wrap: wrap; }
+  .stat-box {
+    flex: 1; min-width: 100px;
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; text-align: center;
+  }
+  .stat-box .val { font-size: 1.6rem; font-weight: 700; font-family: 'DM Mono', monospace; }
+  .stat-box .lbl { font-size: 0.72rem; color: var(--text3); margin-top: 4px; }
+  .stat-box.new .val { color: var(--ok); }
+  .stat-box.dup .val { color: var(--warn); }
+  .stat-box.total .val { color: var(--accent); }
+  .table-scroll { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .btn {
+    background: var(--accent); color: white; border: none;
+    padding: 10px 24px; border-radius: 8px; cursor: pointer;
+    font-family: inherit; font-size: 0.88rem; font-weight: 500;
+    transition: opacity 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary { background: none; border: 1px solid var(--border); color: var(--text2); }
+  .btn-small {
+    background: none; border: 1px solid var(--border); color: var(--text2);
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 0.75rem; transition: all 0.2s;
+  }
+  .btn-small:hover { border-color: var(--accent); color: var(--accent); }
+  .progress-wrap { margin-top: 1rem; display: none; }
+  .progress-bar-bg { width: 100%; height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+  .progress-text { font-size: 0.78rem; color: var(--text2); margin-top: 6px; }
+  .log-box {
+    margin-top: 1rem; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; font-family: 'DM Mono', monospace;
+    font-size: 0.75rem; color: var(--text2); max-height: 160px; overflow-y: auto;
+    display: none;
+  }
+  .log-box .ok-line { color: var(--ok); }
+  .log-box .err-line { color: var(--danger); }
+  .hint { font-size: 0.75rem; color: var(--text3); margin-top: 0.5rem; line-height: 1.6; }
+  .filename { font-size: 0.82rem; color: var(--accent2); margin-top: 8px; }
+  .badge-new { background: rgba(16,185,129,0.15); color: var(--ok); padding:2px 8px; border-radius:10px; font-size:0.68rem; }
+  .badge-dup { background: rgba(245,158,11,0.15); color: var(--warn); padding:2px 8px; border-radius:10px; font-size:0.68rem; }
+  tr.dup td { color: var(--text3); }
+
+  .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
+  .filter-field { flex: 1; min-width: 130px; }
+  .filter-field label { display: block; font-size: 0.75rem; color: var(--text3); margin-bottom: 4px; }
+  .filter-field input, .filter-field select {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px;
+    font-family: 'DM Mono', monospace; font-size: 0.8rem; outline: none;
+  }
+  .store-list { display: flex; flex-direction: column; gap: 8px; }
+  .store-row { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .store-row-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; cursor: pointer; transition: background 0.15s; }
+  .store-row-head:hover { background: rgba(59,130,246,0.06); }
+  .store-name { font-weight: 500; font-size: 0.88rem; display: flex; align-items: center; gap: 8px; }
+  .store-name .arrow { color: var(--text3); font-size: 0.7rem; transition: transform 0.2s; display: inline-block; }
+  .store-row.open .arrow { transform: rotate(90deg); }
+  .store-summary { display: flex; gap: 1.5rem; font-size: 0.78rem; color: var(--text2); }
+  .store-summary .num { font-family: 'DM Mono', monospace; color: var(--accent); font-weight: 500; }
+  .store-detail { display: none; border-top: 1px solid var(--border); }
+  .store-row.open .store-detail { display: block; }
+  .empty-state { text-align: center; padding: 2rem; color: var(--text3); font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -307,10 +432,16 @@
   </div>
 </header>
 
+<nav class="main-nav">
+  <button class="main-nav-tab active" data-page="page-dashboard" onclick="switchPage('page-dashboard', this)">📋 照合結果</button>
+  <button class="main-nav-tab" data-page="page-pos" onclick="switchPage('page-pos', this)">💳 POS取り込み</button>
+  <button class="main-nav-tab" data-page="page-ticket" onclick="switchPage('page-ticket', this)">🎟 発券データ取り込み</button>
+</nav>
+
 <div class="container">
 
   <div class="config-panel" id="config-panel">
-    <h3>Supabase 接続設定</h3>
+    <h3>Supabase 接続設定(全タブ共通)</h3>
     <div class="config-grid">
       <div class="config-field">
         <label>Project URL</label>
@@ -324,59 +455,182 @@
     <button class="btn-save" onclick="saveConfig()">保存して接続</button>
   </div>
 
-  <div class="stats-grid" id="stats-grid">
-    <div class="stat-card info">
-      <div class="stat-label">総件数</div>
-      <div class="stat-value" id="stat-total">—</div>
-    </div>
-    <div class="stat-card ok">
-      <div class="stat-label">正規の券</div>
-      <div class="stat-value" id="stat-ok">—</div>
-    </div>
-    <div class="stat-card warn">
-      <div class="stat-label">要確認</div>
-      <div class="stat-value" id="stat-warn">—</div>
-    </div>
-    <div class="stat-card danger">
-      <div class="stat-label">期限切れ使用</div>
-      <div class="stat-value" id="stat-expired">—</div>
-    </div>
-    <div class="stat-card danger">
-      <div class="stat-label">読取不能</div>
-      <div class="stat-value" id="stat-unread">—</div>
-    </div>
-  </div>
+  <!-- ============ ページ1: 照合結果ダッシュボード ============ -->
+  <div class="page active" id="page-dashboard">
 
-  <div class="filters">
-    <div class="filter-tabs" id="filter-tabs">
-      <button class="tab active" data-filter="all" onclick="setFilter('all',this)">すべて</button>
-      <button class="tab" data-filter="正規の券" onclick="setFilter('正規の券',this)">✅ 正規の券</button>
-      <button class="tab" data-filter="要確認" onclick="setFilter('要確認',this)">⚠️ 要確認</button>
-      <button class="tab" data-filter="期限切れ使用" onclick="setFilter('期限切れ使用',this)">⏰ 期限切れ使用</button>
-      <button class="tab" data-filter="読取不能" onclick="setFilter('読取不能',this)">読取不能</button>
-      <button class="tab archive-tab" data-filter="archived" onclick="setFilter('archived',this)">🗑 アーカイブ</button>
-    </div>
-    <div class="filter-right">
-      <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable()">
-      <input type="date" class="search-input" id="date-from" style="width:140px" onchange="renderTable()">
-      <span style="color:var(--text3);font-size:0.8rem">〜</span>
-      <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable()">
-      <button class="btn-reload" onclick="loadData()">↻</button>
-      <button class="btn-excel" onclick="exportExcel()">📊 Excel出力</button>
-    </div>
-  </div>
-
-  <div class="table-wrap">
-    <div class="table-header">
-      <span class="table-title">照合結果一覧</span>
-      <span class="table-count" id="table-count">0件</span>
-    </div>
-    <div id="table-body">
-      <div class="loading">
-        <div class="loading-spinner"></div>
-        データを読み込み中...
+    <div class="stats-grid" id="stats-grid">
+      <div class="stat-card info">
+        <div class="stat-label">総件数</div>
+        <div class="stat-value" id="stat-total">—</div>
+      </div>
+      <div class="stat-card ok">
+        <div class="stat-label">正規の券</div>
+        <div class="stat-value" id="stat-ok">—</div>
+      </div>
+      <div class="stat-card warn">
+        <div class="stat-label">要確認</div>
+        <div class="stat-value" id="stat-warn">—</div>
+      </div>
+      <div class="stat-card danger">
+        <div class="stat-label">期限切れ使用</div>
+        <div class="stat-value" id="stat-expired">—</div>
+      </div>
+      <div class="stat-card danger">
+        <div class="stat-label">読取不能</div>
+        <div class="stat-value" id="stat-unread">—</div>
       </div>
     </div>
+
+    <div class="filters">
+      <div class="filter-tabs" id="filter-tabs">
+        <button class="tab active" data-filter="all" onclick="setFilter('all',this)">すべて</button>
+        <button class="tab" data-filter="正規の券" onclick="setFilter('正規の券',this)">✅ 正規の券</button>
+        <button class="tab" data-filter="要確認" onclick="setFilter('要確認',this)">⚠️ 要確認</button>
+        <button class="tab" data-filter="期限切れ使用" onclick="setFilter('期限切れ使用',this)">⏰ 期限切れ使用</button>
+        <button class="tab" data-filter="読取不能" onclick="setFilter('読取不能',this)">読取不能</button>
+        <button class="tab archive-tab" data-filter="archived" onclick="setFilter('archived',this)">🗑 アーカイブ</button>
+      </div>
+      <div class="filter-right">
+        <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable()">
+        <input type="date" class="search-input" id="date-from" style="width:140px" onchange="renderTable()">
+        <span style="color:var(--text3);font-size:0.8rem">〜</span>
+        <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable()">
+        <button class="btn-reload" onclick="loadData()">↻</button>
+        <button class="btn-excel" onclick="exportExcel()">📊 Excel出力</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="table-header">
+        <span class="table-title">照合結果一覧</span>
+        <span class="table-count" id="table-count">0件</span>
+      </div>
+      <div id="table-body">
+        <div class="loading">
+          <div class="loading-spinner"></div>
+          データを読み込み中...
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============ ページ2: POS取り込み ============ -->
+  <div class="page" id="page-pos">
+
+    <div class="card">
+      <h2><div class="left"><span class="step-num">1</span>CSVファイルを読み込む</div></h2>
+      <div class="dropzone" id="pos-dropzone">
+        <div class="icon">📄</div>
+        <div>ここにCSVファイルをドラッグ&ドロップ<br>またはクリックして選択</div>
+        <small>WEB本社からダウンロードした「カート_売上照会....csv」(Shift-JIS)を選んでください</small>
+      </div>
+      <input type="file" id="pos-file-input" accept=".csv">
+      <div class="filename" id="pos-filename"></div>
+    </div>
+
+    <div class="card" id="pos-preview-card" style="display:none">
+      <h2><div class="left"><span class="step-num">2</span>プレビュー・重複チェック</div></h2>
+      <div class="stats-row">
+        <div class="stat-box total">
+          <div class="val" id="pos-stat-total">0</div>
+          <div class="lbl">CSV内の件数</div>
+        </div>
+        <div class="stat-box dup">
+          <div class="val" id="pos-stat-dup">0</div>
+          <div class="lbl">重複(取り込み済み)</div>
+        </div>
+        <div class="stat-box new">
+          <div class="val" id="pos-stat-new">0</div>
+          <div class="lbl">新規取り込み対象</div>
+        </div>
+      </div>
+      <div class="hint">重複判定は「店舗名 + 日付 + 金額 + 顧客名」の組み合わせで行っています。同じCSVを何度読み込んでも、二重登録されません。</div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>判定</th><th>店舗コード</th><th>店舗名</th><th>カード</th><th>売上金額</th><th>入金金額</th><th>日付</th><th>顧客名</th></tr>
+          </thead>
+          <tbody id="pos-preview-tbody"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:1.2rem;display:flex;gap:10px;align-items:center">
+        <button class="btn" id="pos-upsert-btn">新規<span id="pos-upsert-count">0</span>件をSupabaseに取り込む</button>
+        <button class="btn btn-secondary" id="pos-reset-btn">リセット</button>
+      </div>
+      <div class="progress-wrap" id="pos-progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="pos-progress-fill"></div></div>
+        <div class="progress-text" id="pos-progress-text"></div>
+      </div>
+      <div class="log-box" id="pos-log-box"></div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <div class="left"><span class="step-num">3</span>保存済みデータを店舗別に見る</div>
+        <button class="btn-small" id="pos-store-reload-btn">↻ 再読み込み</button>
+      </h2>
+      <div class="filter-row">
+        <div class="filter-field">
+          <label>対象月</label>
+          <select id="pos-filter-month"><option value="">すべての月</option></select>
+        </div>
+        <div class="filter-field">
+          <label>金額(下限)</label>
+          <input type="number" id="pos-filter-amount-min" placeholder="例: 10000">
+        </div>
+        <div class="filter-field">
+          <label>金額(上限)</label>
+          <input type="number" id="pos-filter-amount-max" placeholder="例: 30000">
+        </div>
+        <div class="filter-field" style="flex:0 0 auto">
+          <label>&nbsp;</label>
+          <button class="btn-small" id="pos-filter-apply-btn">絞り込む</button>
+        </div>
+      </div>
+      <div class="hint" id="pos-store-view-hint">「再読み込み」を押すと、Supabaseに保存済みの全お会計データを店舗別に集計して表示します。店舗名をクリックすると明細が開きます。</div>
+      <div id="pos-store-view-body" style="margin-top:1rem"></div>
+    </div>
+
+  </div>
+
+  <!-- ============ ページ3: 発券データ取り込み ============ -->
+  <div class="page" id="page-ticket">
+
+    <div class="card">
+      <h2><div class="left"><span class="step-num">1</span>在庫管理表Excelを読み込む</div></h2>
+      <div class="dropzone" id="ticket-dropzone">
+        <div class="icon">📊</div>
+        <div>ここにExcelファイルをドラッグ&ドロップ<br>またはクリックして選択</div>
+        <small>シスクから届いた「在庫管理表....xlsx」を選んでください(中の「ギフチケ管理表」タブを自動で読み取ります)</small>
+      </div>
+      <input type="file" id="ticket-file-input" accept=".xlsx,.xls">
+      <div class="filename" id="ticket-filename"></div>
+    </div>
+
+    <div class="card" id="ticket-preview-card" style="display:none">
+      <h2><div class="left"><span class="step-num">2</span>プレビュー・件数確認</div></h2>
+      <div class="stats-row" id="ticket-stats-row"></div>
+      <div class="hint">券番号の頭文字(A/B/C/P)からコースを自動判定しています。既存の券番号は情報が上書き更新され、新しい券番号は追加されます(Upsert)。</div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>券番号</th><th>コース</th><th>出庫日</th><th>出庫先</th><th>備考</th></tr>
+          </thead>
+          <tbody id="ticket-preview-tbody"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:1.2rem;display:flex;gap:10px;align-items:center">
+        <button class="btn" id="ticket-upsert-btn"><span id="ticket-upsert-count">0</span>件をissued_ticketsへUpsert</button>
+        <button class="btn btn-secondary" id="ticket-reset-btn">リセット</button>
+      </div>
+      <div class="progress-wrap" id="ticket-progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="ticket-progress-fill"></div></div>
+        <div class="progress-text" id="ticket-progress-text"></div>
+      </div>
+      <div class="log-box" id="ticket-log-box"></div>
+    </div>
+
   </div>
 
 </div>
@@ -392,12 +646,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// 固定の接続情報(誰がどのアカウントで開いても自動的に接続されます)
+/* ==================== 共通:接続設定・ページ切り替え ==================== */
 const DEFAULT_SUPABASE_URL = 'https://nyziybuxchsicnfkujij.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'sb_publishable_faUfMhKJTFPTaeFHeE8Z6A_qo23Wutl';
 
-let allData = [];
-let currentFilter = 'all';
 let SUPABASE_URL = localStorage.getItem('supabase_url') || DEFAULT_SUPABASE_URL;
 let SUPABASE_KEY = localStorage.getItem('supabase_key') || DEFAULT_SUPABASE_KEY;
 
@@ -421,6 +673,24 @@ function saveConfig() {
   showToast('接続設定を保存しました', 'success');
   loadData();
 }
+
+function switchPage(pageId, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(pageId).classList.add('active');
+  document.querySelectorAll('.main-nav-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+/* ==================== ページ1: 照合結果ダッシュボード ==================== */
+let allData = [];
+let currentFilter = 'all';
 
 async function loadData() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return;
@@ -464,7 +734,7 @@ function updateStats() {
 
 function setFilter(filter, btn) {
   currentFilter = filter;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('#filter-tabs .tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   renderTable();
 }
@@ -527,19 +797,8 @@ function renderTable() {
     <table>
       <thead>
         <tr>
-          <th>判定</th>
-          <th>券番号</th>
-          <th>コース</th>
-          <th>店舗</th>
-          <th>お客様名</th>
-          <th>利用日</th>
-          <th>有効期限</th>
-          <th>旧料金</th>
-          <th>額面</th>
-          <th>売上</th>
-          <th>差額</th>
-          <th>対応状況</th>
-          <th>操作</th>
+          <th>判定</th><th>券番号</th><th>コース</th><th>店舗</th><th>お客様名</th><th>利用日</th>
+          <th>有効期限</th><th>旧料金</th><th>額面</th><th>売上</th><th>差額</th><th>対応状況</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -586,10 +845,8 @@ async function updateStatus(ticketNumber, status) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
       method: 'PATCH',
       headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
+        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json', 'Prefer': 'return=minimal'
       },
       body: JSON.stringify({ status })
     });
@@ -607,10 +864,8 @@ async function setArchived(ticketNumber, archived) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
       method: 'PATCH',
       headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
+        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json', 'Prefer': 'return=minimal'
       },
       body: JSON.stringify({ archived })
     });
@@ -625,14 +880,8 @@ async function setArchived(ticketNumber, archived) {
     }
   } catch(e) { showToast('更新エラー: ' + e.message, 'error'); }
 }
-
-function archiveRow(ticketNumber) {
-  setArchived(ticketNumber, true);
-}
-
-function restoreRow(ticketNumber) {
-  setArchived(ticketNumber, false);
-}
+function archiveRow(ticketNumber) { setArchived(ticketNumber, true); }
+function restoreRow(ticketNumber) { setArchived(ticketNumber, false); }
 
 function showDetail(ticketNumber) {
   const r = allData.find(d => d.ticket_number === ticketNumber);
@@ -656,11 +905,7 @@ function showDetail(ticketNumber) {
   `;
   document.getElementById('modal').classList.add('open');
 }
-
-function closeModal() {
-  document.getElementById('modal').classList.remove('open');
-}
-
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
 document.getElementById('modal').addEventListener('click', e => {
   if (e.target === document.getElementById('modal')) closeModal();
 });
@@ -676,18 +921,13 @@ function exportExcel() {
     }
     return true;
   });
-
   const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','旧料金','額面','売上金額','差額','判定理由','対応状況'];
   const rows = filtered.map(r => [
     r.judgment||'', r.ticket_number||'', r.course_type||'',
     r.store_name||'', formatCustomerName(r, true), formatUsedDate(r, true), r.expiry_date||'',
     r.is_green_stamp ? '旧料金' : '', r.face_value||0, r.sales_amount||0, r.amount_diff||0, r.judgment_reason||'', r.status||''
   ]);
-
-  const csv = [headers, ...rows].map(row =>
-    row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')
-  ).join('\n');
-
+  const csv = [headers, ...rows].map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const bom = '\uFEFF';
   const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -699,12 +939,394 @@ function exportExcel() {
   showToast('Excelファイルを出力しました', 'success');
 }
 
-function showToast(msg, type='success') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = `toast ${type} show`;
-  setTimeout(() => t.classList.remove('show'), 3000);
+/* ==================== ページ2: POS取り込み ==================== */
+let posParsedRows = [];
+let posExistingKeys = new Set();
+let posAllSavedRows = [];
+
+const posDropzone = document.getElementById('pos-dropzone');
+const posFileInput = document.getElementById('pos-file-input');
+posDropzone.addEventListener('click', () => posFileInput.click());
+posDropzone.addEventListener('dragover', e => { e.preventDefault(); posDropzone.classList.add('dragover'); });
+posDropzone.addEventListener('dragleave', () => posDropzone.classList.remove('dragover'));
+posDropzone.addEventListener('drop', e => {
+  e.preventDefault(); posDropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handlePosFile(e.dataTransfer.files[0]);
+});
+posFileInput.addEventListener('change', e => { if (e.target.files.length) handlePosFile(e.target.files[0]); });
+
+async function handlePosFile(file) {
+  document.getElementById('pos-filename').textContent = `選択中: ${file.name}`;
+  const buf = await file.arrayBuffer();
+  let text;
+  try { text = new TextDecoder('shift-jis').decode(buf); } catch(e) { text = new TextDecoder('utf-8').decode(buf); }
+  parsePosCsv(text);
 }
+
+function parsePosCsv(text) {
+  const lines = text.split(/\r\n|\n|\r/).filter(l => l.trim().length > 0);
+  if (lines.length === 0) { alert('CSVの内容を読み取れませんでした'); return; }
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+    if (lines[i].includes('店舗') || lines[i].includes('売上') || lines[i].includes('日付')) { headerIdx = i; break; }
+  }
+  const dataLines = lines.slice(headerIdx + 1);
+  const rows = [];
+  for (const line of dataLines) {
+    if (line.includes('削除済') || line.includes('合計')) continue;
+    const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+    if (cols.length < 6) continue;
+    const [storeCode, storeName, cardType, sales, deposit, dateStr, customerName] = cols;
+    if (!storeCode || !dateStr) continue;
+    const m = dateStr.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+    if (!m) continue;
+    const isoDate = `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    rows.push({
+      store_code: storeCode, store_name: storeName || '', card_type: cardType || '',
+      sales_amount: parseFloat((sales||'0').replace(/[^\d.-]/g,'')) || 0,
+      deposit_amount: parseFloat((deposit||'0').replace(/[^\d.-]/g,'')) || 0,
+      sale_date: isoDate, customer_name: customerName || ''
+    });
+  }
+  posParsedRows = rows;
+  if (rows.length === 0) { alert('取り込める行が見つかりませんでした。CSVの形式を確認してください。'); return; }
+  loadPosExistingAndPreview();
+}
+
+function posMakeKey(r) { return `${r.store_name}|${r.sale_date}|${r.sales_amount}|${r.customer_name}`; }
+
+async function loadPosExistingAndPreview() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) { alert('Supabaseの接続設定を入力してください'); return; }
+  document.getElementById('pos-preview-card').style.display = 'block';
+  document.getElementById('pos-preview-tbody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3)">既存データと照合中...</td></tr>';
+  try {
+    const existing = await fetchAllPosSales(['store_name','sale_date','sales_amount','customer_name']);
+    posExistingKeys = new Set(existing.map(posMakeKey));
+  } catch (e) {
+    alert('既存データの取得に失敗しました: ' + e.message);
+    posExistingKeys = new Set();
+  }
+  renderPosPreview();
+}
+
+function renderPosPreview() {
+  let dupCount = 0;
+  const rowsHtml = posParsedRows.map(r => {
+    const isDup = posExistingKeys.has(posMakeKey(r));
+    if (isDup) dupCount++;
+    return `
+      <tr class="${isDup ? 'dup' : ''}">
+        <td>${isDup ? '<span class="badge-dup">重複</span>' : '<span class="badge-new">新規</span>'}</td>
+        <td>${r.store_code}</td><td>${r.store_name}</td><td>${r.card_type}</td>
+        <td>¥${r.sales_amount.toLocaleString()}</td><td>¥${r.deposit_amount.toLocaleString()}</td>
+        <td>${r.sale_date}</td><td>${r.customer_name}</td>
+      </tr>
+    `;
+  }).join('');
+  document.getElementById('pos-preview-tbody').innerHTML = rowsHtml;
+  const newCount = posParsedRows.length - dupCount;
+  document.getElementById('pos-stat-total').textContent = posParsedRows.length;
+  document.getElementById('pos-stat-dup').textContent = dupCount;
+  document.getElementById('pos-stat-new').textContent = newCount;
+  document.getElementById('pos-upsert-count').textContent = newCount;
+  document.getElementById('pos-upsert-btn').disabled = newCount === 0;
+}
+
+document.getElementById('pos-upsert-btn').addEventListener('click', async () => {
+  const newRows = posParsedRows.filter(r => !posExistingKeys.has(posMakeKey(r)));
+  if (newRows.length === 0) return;
+  const upsertBtn = document.getElementById('pos-upsert-btn');
+  upsertBtn.disabled = true;
+  upsertBtn.textContent = '取り込み中...';
+  const progressWrap = document.getElementById('pos-progress-wrap');
+  const progressFill = document.getElementById('pos-progress-fill');
+  const progressText = document.getElementById('pos-progress-text');
+  const logBox = document.getElementById('pos-log-box');
+  progressWrap.style.display = 'block'; logBox.style.display = 'block'; logBox.innerHTML = '';
+  const batchSize = 200; let done = 0; let errCount = 0;
+  for (let i = 0; i < newRows.length; i += batchSize) {
+    const batch = newRows.slice(i, i + batchSize);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+        body: JSON.stringify(batch)
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        errCount += batch.length;
+        logBox.innerHTML += `<div class="err-line">✗ ${i+1}〜${i+batch.length}件目: エラー (${res.status}) ${errText.slice(0,150)}</div>`;
+      } else {
+        done += batch.length;
+        logBox.innerHTML += `<div class="ok-line">✓ ${i+1}〜${i+batch.length}件目: 成功</div>`;
+      }
+    } catch (e) {
+      errCount += batch.length;
+      logBox.innerHTML += `<div class="err-line">✗ ${i+1}〜${i+batch.length}件目: ${e.message}</div>`;
+    }
+    logBox.scrollTop = logBox.scrollHeight;
+    const pct = Math.round(((i + batch.length) / newRows.length) * 100);
+    progressFill.style.width = pct + '%';
+    progressText.textContent = `${i + batch.length} / ${newRows.length} 件処理済み`;
+  }
+  progressText.textContent = `完了しました(成功: ${done}件 / 失敗: ${errCount}件)`;
+  upsertBtn.textContent = '完了しました';
+});
+
+document.getElementById('pos-reset-btn').addEventListener('click', () => {
+  posParsedRows = []; posExistingKeys = new Set();
+  document.getElementById('pos-preview-card').style.display = 'none';
+  document.getElementById('pos-filename').textContent = '';
+  posFileInput.value = '';
+  document.getElementById('pos-progress-wrap').style.display = 'none';
+  document.getElementById('pos-log-box').style.display = 'none';
+  document.getElementById('pos-upsert-btn').disabled = false;
+  document.getElementById('pos-upsert-btn').innerHTML = '新規<span id="pos-upsert-count">0</span>件をSupabaseに取り込む';
+});
+
+async function fetchAllPosSales(selectCols) {
+  const cols = selectCols ? selectCols.join(',') : '*';
+  let all = []; let from = 0; const pageSize = 1000;
+  while (true) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?select=${cols}&order=sale_date.desc`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
+document.getElementById('pos-store-reload-btn').addEventListener('click', loadPosStoreView);
+document.getElementById('pos-filter-apply-btn').addEventListener('click', renderPosStoreView);
+
+async function loadPosStoreView() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) { alert('Supabaseの接続設定を入力してください'); return; }
+  const hint = document.getElementById('pos-store-view-hint');
+  const body = document.getElementById('pos-store-view-body');
+  hint.textContent = '読み込み中...'; body.innerHTML = '';
+  try {
+    posAllSavedRows = await fetchAllPosSales(['store_name','sale_date','sales_amount','customer_name']);
+    hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。`;
+    populatePosMonthFilter();
+    renderPosStoreView();
+  } catch (e) { hint.textContent = '読み込みに失敗しました: ' + e.message; }
+}
+
+function populatePosMonthFilter() {
+  const months = new Set();
+  posAllSavedRows.forEach(r => { if (r.sale_date) months.add(r.sale_date.slice(0, 7)); });
+  const sortedMonths = Array.from(months).sort().reverse();
+  const select = document.getElementById('pos-filter-month');
+  const current = select.value;
+  select.innerHTML = '<option value="">すべての月</option>' + sortedMonths.map(m => `<option value="${m}">${m}</option>`).join('');
+  select.value = current;
+}
+
+function renderPosStoreView() {
+  const body = document.getElementById('pos-store-view-body');
+  if (posAllSavedRows.length === 0) { body.innerHTML = '<div class="empty-state">「↻ 再読み込み」を押してデータを読み込んでください</div>'; return; }
+  const month = document.getElementById('pos-filter-month').value;
+  const amountMin = parseFloat(document.getElementById('pos-filter-amount-min').value);
+  const amountMax = parseFloat(document.getElementById('pos-filter-amount-max').value);
+  const filtered = posAllSavedRows.filter(r => {
+    if (month && (!r.sale_date || !r.sale_date.startsWith(month))) return false;
+    if (!isNaN(amountMin) && (r.sales_amount || 0) < amountMin) return false;
+    if (!isNaN(amountMax) && (r.sales_amount || 0) > amountMax) return false;
+    return true;
+  });
+  if (filtered.length === 0) { body.innerHTML = '<div class="empty-state">条件に合うデータがありません</div>'; return; }
+  const byStore = {};
+  filtered.forEach(r => {
+    const name = r.store_name || '(店舗名不明)';
+    if (!byStore[name]) byStore[name] = { rows: [], total: 0 };
+    byStore[name].rows.push(r);
+    byStore[name].total += (r.sales_amount || 0);
+  });
+  const storeNames = Object.keys(byStore).sort((a, b) => byStore[b].rows.length - byStore[a].rows.length);
+  const html = `<div class="store-list">
+    ${storeNames.map((name, idx) => {
+      const info = byStore[name];
+      const sortedRows = info.rows.slice().sort((a, b) => (b.sale_date || '').localeCompare(a.sale_date || ''));
+      return `
+        <div class="store-row" id="pos-store-row-${idx}">
+          <div class="store-row-head" onclick="togglePosStoreRow(${idx})">
+            <div class="store-name"><span class="arrow">▶</span>${name}</div>
+            <div class="store-summary">
+              <span>件数: <span class="num">${info.rows.length.toLocaleString()}</span></span>
+              <span>合計: <span class="num">¥${info.total.toLocaleString()}</span></span>
+            </div>
+          </div>
+          <div class="store-detail">
+            <div class="table-scroll" style="max-height:260px;border:none;border-radius:0">
+              <table>
+                <thead><tr><th>日付</th><th>金額</th><th>顧客名</th></tr></thead>
+                <tbody>
+                  ${sortedRows.map(r => `<tr><td class="mono">${r.sale_date || '—'}</td><td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td><td>${r.customer_name || '—'}</td></tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('')}
+  </div>`;
+  body.innerHTML = html;
+}
+function togglePosStoreRow(idx) { document.getElementById(`pos-store-row-${idx}`).classList.toggle('open'); }
+
+/* ==================== ページ3: 発券データ取り込み ==================== */
+let ticketParsedRows = [];
+const COURSE_LABELS = { A: 'A', B: 'B', C: 'C', P: 'P' };
+
+const ticketDropzone = document.getElementById('ticket-dropzone');
+const ticketFileInput = document.getElementById('ticket-file-input');
+ticketDropzone.addEventListener('click', () => ticketFileInput.click());
+ticketDropzone.addEventListener('dragover', e => { e.preventDefault(); ticketDropzone.classList.add('dragover'); });
+ticketDropzone.addEventListener('dragleave', () => ticketDropzone.classList.remove('dragover'));
+ticketDropzone.addEventListener('drop', e => {
+  e.preventDefault(); ticketDropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleTicketFile(e.dataTransfer.files[0]);
+});
+ticketFileInput.addEventListener('change', e => { if (e.target.files.length) handleTicketFile(e.target.files[0]); });
+
+async function handleTicketFile(file) {
+  document.getElementById('ticket-filename').textContent = `選択中: ${file.name}`;
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+  const sheetName = wb.SheetNames.find(n => n.includes('ギフチケ管理表') && !n.includes('見本'));
+  if (!sheetName) {
+    alert('「ギフチケ管理表」というタブが見つかりませんでした。シート名を確認してください。\n見つかったタブ: ' + wb.SheetNames.join(', '));
+    return;
+  }
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' });
+  parseTicketSheet(rows);
+}
+
+function ticketToIsoDate(v) {
+  if (!v) return null;
+  if (v instanceof Date) {
+    const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,'0'), d = String(v.getDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  return null;
+}
+
+function parseTicketSheet(rows) {
+  let headerRowIdx = -1; let blockStarts = [];
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const row = rows[i] || []; const noCols = [];
+    row.forEach((cell, colIdx) => {
+      if (String(cell || '').trim() === 'No.' || String(cell || '').trim() === 'No') noCols.push(colIdx);
+    });
+    if (noCols.length >= 2) { headerRowIdx = i; blockStarts = noCols; break; }
+  }
+  if (headerRowIdx === -1) { alert('「No.」列を含むヘッダー行が見つかりませんでした。シートの形式を確認してください。'); return; }
+  const dataRows = rows.slice(headerRowIdx + 1);
+  const result = [];
+  for (const row of dataRows) {
+    for (const startCol of blockStarts) {
+      const ticketNumber = String(row[startCol] || '').trim();
+      if (!ticketNumber) continue;
+      const firstChar = ticketNumber.charAt(0).toUpperCase();
+      if (!/^[A-Z]/.test(firstChar)) continue;
+      const issuedDateRaw = row[startCol + 1];
+      const memoRaw = row[startCol + 2];
+      const destinationRaw = row[startCol + 3];
+      result.push({
+        ticket_number: ticketNumber, course: COURSE_LABELS[firstChar] || firstChar,
+        issued_date: ticketToIsoDate(issuedDateRaw),
+        destination: destinationRaw ? String(destinationRaw).trim() : null,
+        memo: memoRaw ? String(memoRaw).trim() : null
+      });
+    }
+  }
+  ticketParsedRows = result;
+  if (result.length === 0) { alert('券番号を1件も読み取れませんでした。シートの形式を確認してください。'); return; }
+  renderTicketPreview();
+}
+
+function renderTicketPreview() {
+  document.getElementById('ticket-preview-card').style.display = 'block';
+  const counts = {};
+  ticketParsedRows.forEach(r => { counts[r.course] = (counts[r.course]||0) + 1; });
+  let statsHtml = `<div class="stat-box total"><div class="val">${ticketParsedRows.length}</div><div class="lbl">合計件数</div></div>`;
+  Object.keys(counts).sort().forEach(course => {
+    statsHtml += `<div class="stat-box"><div class="val">${counts[course]}</div><div class="lbl">${course}コース</div></div>`;
+  });
+  document.getElementById('ticket-stats-row').innerHTML = statsHtml;
+  const previewRows = ticketParsedRows.slice(0, 200);
+  let html = previewRows.map(r => `
+    <tr>
+      <td class="mono">${r.ticket_number}</td><td>${r.course}</td><td>${r.issued_date || '—'}</td>
+      <td>${r.destination || '—'}</td><td>${r.memo || '—'}</td>
+    </tr>
+  `).join('');
+  if (ticketParsedRows.length > 200) {
+    html += `<tr><td colspan="5" style="text-align:center;color:var(--text3)">...ほか${ticketParsedRows.length - 200}件</td></tr>`;
+  }
+  document.getElementById('ticket-preview-tbody').innerHTML = html;
+  document.getElementById('ticket-upsert-count').textContent = ticketParsedRows.length;
+  document.getElementById('ticket-upsert-btn').disabled = false;
+}
+
+document.getElementById('ticket-upsert-btn').addEventListener('click', async () => {
+  if (!SUPABASE_URL || !SUPABASE_KEY) { alert('Supabaseの接続設定を入力してください'); return; }
+  if (ticketParsedRows.length === 0) return;
+  const upsertBtn = document.getElementById('ticket-upsert-btn');
+  upsertBtn.disabled = true; upsertBtn.textContent = '取り込み中...';
+  const progressWrap = document.getElementById('ticket-progress-wrap');
+  const progressFill = document.getElementById('ticket-progress-fill');
+  const progressText = document.getElementById('ticket-progress-text');
+  const logBox = document.getElementById('ticket-log-box');
+  progressWrap.style.display = 'block'; logBox.style.display = 'block'; logBox.innerHTML = '';
+  const batchSize = 500; let done = 0; let errCount = 0;
+  for (let i = 0; i < ticketParsedRows.length; i += batchSize) {
+    const batch = ticketParsedRows.slice(i, i + batchSize);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?on_conflict=ticket_number`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify(batch)
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        errCount += batch.length;
+        logBox.innerHTML += `<div class="err-line">✗ ${i+1}〜${i+batch.length}件目: エラー (${res.status}) ${errText.slice(0,150)}</div>`;
+      } else {
+        done += batch.length;
+        logBox.innerHTML += `<div class="ok-line">✓ ${i+1}〜${i+batch.length}件目: 成功</div>`;
+      }
+    } catch (e) {
+      errCount += batch.length;
+      logBox.innerHTML += `<div class="err-line">✗ ${i+1}〜${i+batch.length}件目: ${e.message}</div>`;
+    }
+    logBox.scrollTop = logBox.scrollHeight;
+    const pct = Math.round(((i + batch.length) / ticketParsedRows.length) * 100);
+    progressFill.style.width = pct + '%';
+    progressText.textContent = `${i + batch.length} / ${ticketParsedRows.length} 件処理済み`;
+  }
+  progressText.textContent = `完了しました(成功: ${done}件 / 失敗: ${errCount}件)`;
+  upsertBtn.textContent = '完了しました';
+});
+
+document.getElementById('ticket-reset-btn').addEventListener('click', () => {
+  ticketParsedRows = [];
+  document.getElementById('ticket-preview-card').style.display = 'none';
+  document.getElementById('ticket-filename').textContent = '';
+  ticketFileInput.value = '';
+  document.getElementById('ticket-progress-wrap').style.display = 'none';
+  document.getElementById('ticket-log-box').style.display = 'none';
+  document.getElementById('ticket-upsert-btn').disabled = false;
+  document.getElementById('ticket-upsert-btn').innerHTML = '<span id="ticket-upsert-count">0</span>件をissued_ticketsへUpsert';
+});
 </script>
 </body>
 </html>
