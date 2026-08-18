@@ -631,6 +631,29 @@
       <div class="log-box" id="ticket-log-box"></div>
     </div>
 
+    <div class="card">
+      <h2>
+        <div class="left"><span class="step-num">3</span>保存済みデータを月・店舗別に見る</div>
+        <button class="btn-small" id="ticket-store-reload-btn">↻ 再読み込み</button>
+      </h2>
+      <div class="filter-row">
+        <div class="filter-field">
+          <label>対象月(出庫日)</label>
+          <select id="ticket-filter-month"><option value="">すべての月</option></select>
+        </div>
+        <div class="filter-field">
+          <label>出庫先(店舗)</label>
+          <select id="ticket-filter-destination"><option value="">すべての出庫先</option></select>
+        </div>
+        <div class="filter-field" style="flex:0 0 auto">
+          <label>&nbsp;</label>
+          <button class="btn-small" id="ticket-filter-apply-btn">絞り込む</button>
+        </div>
+      </div>
+      <div class="hint" id="ticket-store-view-hint">「再読み込み」を押すと、Supabaseに保存済みの全発券データを出庫先(店舗)別に集計して表示します。出庫先名をクリックすると明細が開きます。</div>
+      <div id="ticket-store-view-body" style="margin-top:1rem"></div>
+    </div>
+
   </div>
 
 </div>
@@ -1327,6 +1350,108 @@ document.getElementById('ticket-reset-btn').addEventListener('click', () => {
   document.getElementById('ticket-upsert-btn').disabled = false;
   document.getElementById('ticket-upsert-btn').innerHTML = '<span id="ticket-upsert-count">0</span>件をissued_ticketsへUpsert';
 });
+
+/* ==================== ページ3: 保存済みデータを月・店舗別に見る ==================== */
+let ticketAllSavedRows = [];
+
+async function fetchAllIssuedTickets(selectCols) {
+  const cols = selectCols ? selectCols.join(',') : '*';
+  let all = []; let from = 0; const pageSize = 1000;
+  while (true) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=${cols}&order=issued_date.desc`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
+document.getElementById('ticket-store-reload-btn').addEventListener('click', loadTicketStoreView);
+document.getElementById('ticket-filter-apply-btn').addEventListener('click', renderTicketStoreView);
+
+async function loadTicketStoreView() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) { alert('Supabaseの接続設定を入力してください'); return; }
+  const hint = document.getElementById('ticket-store-view-hint');
+  const body = document.getElementById('ticket-store-view-body');
+  hint.textContent = '読み込み中...'; body.innerHTML = '';
+  try {
+    ticketAllSavedRows = await fetchAllIssuedTickets(['ticket_number','course','issued_date','destination']);
+    hint.textContent = `保存済み ${ticketAllSavedRows.length.toLocaleString()} 件を読み込みました。出庫先名をクリックすると明細が開きます。`;
+    populateTicketFilters();
+    renderTicketStoreView();
+  } catch (e) { hint.textContent = '読み込みに失敗しました: ' + e.message; }
+}
+
+function populateTicketFilters() {
+  const months = new Set();
+  const destinations = new Set();
+  ticketAllSavedRows.forEach(r => {
+    if (r.issued_date) months.add(r.issued_date.slice(0, 7));
+    if (r.destination) destinations.add(r.destination);
+  });
+  const sortedMonths = Array.from(months).sort().reverse();
+  const monthSelect = document.getElementById('ticket-filter-month');
+  const curMonth = monthSelect.value;
+  monthSelect.innerHTML = '<option value="">すべての月</option>' + sortedMonths.map(m => `<option value="${m}">${m}</option>`).join('');
+  monthSelect.value = curMonth;
+
+  const sortedDest = Array.from(destinations).sort();
+  const destSelect = document.getElementById('ticket-filter-destination');
+  const curDest = destSelect.value;
+  destSelect.innerHTML = '<option value="">すべての出庫先</option>' + sortedDest.map(d => `<option value="${d}">${d}</option>`).join('');
+  destSelect.value = curDest;
+}
+
+function renderTicketStoreView() {
+  const body = document.getElementById('ticket-store-view-body');
+  if (ticketAllSavedRows.length === 0) { body.innerHTML = '<div class="empty-state">「↻ 再読み込み」を押してデータを読み込んでください</div>'; return; }
+  const month = document.getElementById('ticket-filter-month').value;
+  const destination = document.getElementById('ticket-filter-destination').value;
+  const filtered = ticketAllSavedRows.filter(r => {
+    if (month && (!r.issued_date || !r.issued_date.startsWith(month))) return false;
+    if (destination && r.destination !== destination) return false;
+    return true;
+  });
+  if (filtered.length === 0) { body.innerHTML = '<div class="empty-state">条件に合うデータがありません</div>'; return; }
+  const byDest = {};
+  filtered.forEach(r => {
+    const name = r.destination || '(出庫先不明)';
+    if (!byDest[name]) byDest[name] = [];
+    byDest[name].push(r);
+  });
+  const destNames = Object.keys(byDest).sort((a, b) => byDest[b].length - byDest[a].length);
+  const html = `<div class="store-list">
+    ${destNames.map((name, idx) => {
+      const rows = byDest[name].slice().sort((a, b) => (b.issued_date || '').localeCompare(a.issued_date || ''));
+      return `
+        <div class="store-row" id="ticket-store-row-${idx}">
+          <div class="store-row-head" onclick="toggleTicketStoreRow(${idx})">
+            <div class="store-name"><span class="arrow">▶</span>${name}</div>
+            <div class="store-summary">
+              <span>件数: <span class="num">${rows.length.toLocaleString()}</span></span>
+            </div>
+          </div>
+          <div class="store-detail">
+            <div class="table-scroll" style="max-height:260px;border:none;border-radius:0">
+              <table>
+                <thead><tr><th>券番号</th><th>コース</th><th>出庫日</th></tr></thead>
+                <tbody>
+                  ${rows.map(r => `<tr><td class="mono">${r.ticket_number || '—'}</td><td>${r.course || '—'}</td><td class="mono">${r.issued_date || '—'}</td></tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('')}
+  </div>`;
+  body.innerHTML = html;
+}
+function toggleTicketStoreRow(idx) { document.getElementById(`ticket-store-row-${idx}`).classList.toggle('open'); }
 </script>
 </body>
 </html>
