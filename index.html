@@ -496,6 +496,7 @@
         <span style="color:var(--text3);font-size:0.8rem">〜</span>
         <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable()">
         <button class="btn-reload" onclick="loadData()">↻</button>
+        <button class="btn-reload" id="rematch-btn" onclick="rematchAllPending()">🔁 POSデータで再照合</button>
         <button class="btn-excel" onclick="exportExcel()">📊 Excel出力</button>
       </div>
     </div>
@@ -960,6 +961,147 @@ function exportExcel() {
   a.click();
   URL.revokeObjectURL(url);
   showToast('Excelファイルを出力しました', 'success');
+}
+
+/* ==================== 再照合機能(画像の再アップロード不要) ==================== */
+// n8n側のSTORE_POS_MAPPINGと必ず同じ内容にしてください。
+// 新しい店舗を追加するときは、n8nとここの両方に追加が必要です。
+const STORE_POS_MAPPING = {
+  '三宿店': '三宿',
+  '恵比寿店': '恵比寿',
+  '名古屋錦店': '名古屋パン',
+  '銀座店': '銀座',
+  '横浜中華街店': '横浜元町',
+  'PENTHOUSE堀江店': '堀ペン',
+  'PENTHOUSE代官山店': '代官山',
+  'PENTHOUSE 西麻布': '西ペン',
+  'PANTHEON白金台プラチナム': '白金パン',
+  'PANTHEON赤坂': '赤坂パン',
+  'PANTHEON西麻布': '西麻布',
+  'PANTHEON西梅田': '西梅田',
+  'PANTHEON西中洲': '西中洲',
+  'PANTHEON新宿': '新宿パン',
+  'PANTHEON心斎橋': '心斎パン',
+  'PANTHEON銀座並木通り': '銀座パン',
+  'PANTHEON京都祇園': '京都祇園'
+};
+
+async function fetchIssuedTicket(ticketNumber) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?ticket_number=eq.${encodeURIComponent(ticketNumber)}&select=issued_date,destination`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows.length > 0 ? rows[0] : null;
+}
+
+function findPosMatchesForRecord(r, posRows) {
+  let ocrMonthDay = null;
+  if (r.used_date) {
+    const parts = r.used_date.split('-');
+    if (parts.length === 3) ocrMonthDay = `${parts[1]}-${parts[2]}`;
+  }
+  const ocrSurname = (r.customer_name || '').replace(/様$/, '').replace(/\s|\u3000/g, '').trim();
+
+  function importBatchDate(p) { return (p.imported_at || '').slice(0, 10); }
+  const importDates = posRows.map(importBatchDate).filter(Boolean);
+  const latestImportDate = importDates.length > 0 ? importDates.sort().slice(-1)[0] : null;
+  const recentBatchRows = latestImportDate ? posRows.filter(p => importBatchDate(p) === latestImportDate) : [];
+
+  function findMatches(rows) {
+    if (!ocrMonthDay || !ocrSurname) return [];
+    return rows.filter(p => {
+      if (!p.sale_date) return false;
+      const pMonthDay = p.sale_date.slice(5);
+      const pName = (p.customer_name || '').replace(/\s|\u3000/g, '');
+      if (!pName) return false;
+      const nameMatches = pName.includes(ocrSurname) || ocrSurname.includes(pName);
+      return pMonthDay === ocrMonthDay && nameMatches;
+    });
+  }
+
+  let posMatches = findMatches(recentBatchRows);
+  let matchSource = '直近バッチ';
+  if (posMatches.length === 0 && recentBatchRows.length > 0) {
+    const fallback = findMatches(posRows);
+    if (fallback.length > 0) { posMatches = fallback; matchSource = '全期間(フォールバック)'; }
+  }
+  if (recentBatchRows.length === 0) {
+    posMatches = findMatches(posRows);
+    matchSource = '全期間(直近データなし)';
+  }
+  return { posMatches, matchSource };
+}
+
+async function rematchTicket(r) {
+  const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?store_name=eq.${encodeURIComponent(posStoreName)}&sales_amount=eq.${r.face_value}&select=sale_date,customer_name,imported_at`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  const posRows = res.ok ? await res.json() : [];
+  const { posMatches, matchSource } = findPosMatchesForRecord(r, posRows);
+
+  let confirmedUsedDate = null;
+  let posMatchStatus = '';
+  if (posMatches.length === 1) { confirmedUsedDate = posMatches[0].sale_date; posMatchStatus = '一致'; }
+  else if (posMatches.length > 1) { confirmedUsedDate = posMatches[0].sale_date; posMatchStatus = '複数候補'; }
+  else { posMatchStatus = '売上データなし'; }
+
+  let isExpired = null;
+  if (confirmedUsedDate && r.expiry_date) {
+    const e = new Date(r.expiry_date), u = new Date(confirmedUsedDate);
+    if (!isNaN(e.getTime()) && !isNaN(u.getTime())) isExpired = u.getTime() > e.getTime();
+  }
+
+  const issued = await fetchIssuedTicket(r.ticket_number);
+  const isIssued = !!issued;
+
+  let judgment, judgmentReason;
+  if (!r.ticket_number) { judgment = '読取不能'; judgmentReason = '券番号が読み取れませんでした'; }
+  else if (isExpired === true) { judgment = '期限切れ使用'; judgmentReason = `有効期限(${r.expiry_date})を過ぎて使用されています(確定日: ${confirmedUsedDate})`; }
+  else if (!isIssued) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
+  else if (posMatchStatus === '売上データなし') { judgment = '要確認'; judgmentReason = '発券データとは一致していますが、お会計データに一致する記録が見つかりません'; }
+  else if (posMatchStatus === '複数候補') { judgment = '要確認'; judgmentReason = `発券データとは一致していますが、お会計データに複数の候補があります(${matchSource})`; }
+  else { judgment = '正規の券'; judgmentReason = `発券データ・お会計データと一致(${matchSource})`; }
+
+  const updateBody = {
+    used_date_confirmed: confirmedUsedDate,
+    is_expired: isExpired,
+    pos_match_status: posMatchStatus,
+    judgment: judgment,
+    judgment_reason: judgmentReason,
+    issued_date: isIssued ? issued.issued_date : null,
+    issued_destination: isIssued ? issued.destination : null,
+    sales_amount: isIssued ? r.face_value : 0
+  };
+
+  const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
+    method: 'PATCH',
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(updateBody)
+  });
+  return { ok: patchRes.ok, judgment };
+}
+
+async function rematchAllPending() {
+  const targets = allData.filter(r => !r.archived && r.judgment === '要確認');
+  if (targets.length === 0) { showToast('再照合対象(要確認)の券がありません', 'error'); return; }
+  const btn = document.getElementById('rematch-btn');
+  btn.disabled = true;
+  let success = 0, changed = 0;
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    btn.textContent = `🔁 再照合中... (${i+1}/${targets.length})`;
+    try {
+      const before = r.judgment;
+      const result = await rematchTicket(r);
+      if (result.ok) { success++; if (result.judgment !== before) changed++; }
+    } catch(e) { /* この券はスキップして続行 */ }
+  }
+  btn.disabled = false;
+  btn.textContent = '🔁 POSデータで再照合';
+  showToast(`再照合完了: ${success}件処理(判定が変わったのは${changed}件)`, 'success');
+  loadData();
 }
 
 /* ==================== ページ2: POS取り込み ==================== */
