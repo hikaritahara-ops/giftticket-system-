@@ -953,7 +953,10 @@ function showDetail(ticketNumber) {
       <label>利用日(確定日として保存されます)</label>
       <input type="date" class="edit-input" id="edit-used-date" value="${currentUsedDate}">
     </div>
-    <div class="detail-item"><label>有効期限</label><span class="mono">${r.expiry_date||'—'}</span></div>
+    <div class="detail-item">
+      <label>有効期限</label>
+      <input type="date" class="edit-input" id="edit-expiry-date" value="${r.expiry_date||''}">
+    </div>
     <div class="detail-item"><label>旧料金(緑スタンプ)</label><span>${r.is_green_stamp ? '🟢 あり' : 'なし'}</span></div>
     <div class="detail-item"><label>額面金額</label><span class="mono">¥${(r.face_value||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>売上金額</label><span class="mono">¥${(r.sales_amount||0).toLocaleString()}</span></div>
@@ -973,14 +976,15 @@ async function saveManualEdit() {
   const newJudgment = document.getElementById('edit-judgment').value;
   const newCustomerName = document.getElementById('edit-customer-name').value.trim();
   const newUsedDate = document.getElementById('edit-used-date').value || null;
+  const newExpiryDate = document.getElementById('edit-expiry-date').value || null;
 
-  if (!confirm(`券番号 ${ticketNumber} を以下の内容で保存します。よろしいですか?\n\n判定: ${newJudgment}\nお客様名: ${newCustomerName || '(空欄)'}\n利用日: ${newUsedDate || '(空欄)'}`)) {
+  if (!confirm(`券番号 ${ticketNumber} を以下の内容で保存します。よろしいですか?\n\n判定: ${newJudgment}\nお客様名: ${newCustomerName || '(空欄)'}\n利用日: ${newUsedDate || '(空欄)'}\n有効期限: ${newExpiryDate || '(空欄)'}`)) {
     return;
   }
 
   let isExpired = r.is_expired;
-  if (newUsedDate && r.expiry_date) {
-    const e = new Date(r.expiry_date), u = new Date(newUsedDate);
+  if (newUsedDate && newExpiryDate) {
+    const e = new Date(newExpiryDate), u = new Date(newUsedDate);
     if (!isNaN(e.getTime()) && !isNaN(u.getTime())) isExpired = u.getTime() > e.getTime();
   }
 
@@ -989,6 +993,7 @@ async function saveManualEdit() {
     judgment_reason: `手動修正(${newJudgment})`,
     customer_name: newCustomerName,
     used_date_confirmed: newUsedDate,
+    expiry_date: newExpiryDate,
     pos_match_status: '手動確認',
     is_expired: isExpired
   };
@@ -1079,8 +1084,9 @@ async function fetchIssuedTicket(ticketNumber) {
 
 function findPosMatchesForRecord(r, posRows) {
   let ocrMonthDay = null;
-  if (r.used_date) {
-    const parts = r.used_date.split('-');
+  const dateSource = r.used_date_confirmed || r.used_date;
+  if (dateSource) {
+    const parts = dateSource.split('-');
     if (parts.length === 3) ocrMonthDay = `${parts[1]}-${parts[2]}`;
   }
   const ocrSurname = (r.customer_name || '').replace(/様$/, '').replace(/\s|\u3000/g, '').trim();
@@ -1125,9 +1131,21 @@ async function rematchTicket(r) {
 
   let confirmedUsedDate = null;
   let posMatchStatus = '';
-  if (posMatches.length === 1) { confirmedUsedDate = posMatches[0].sale_date; posMatchStatus = '一致'; }
-  else if (posMatches.length > 1) { confirmedUsedDate = posMatches[0].sale_date; posMatchStatus = '複数候補'; }
-  else { posMatchStatus = '売上データなし'; }
+  const wasManual = r.pos_match_status === '手動確認' && r.used_date_confirmed;
+
+  if (posMatches.length === 1) {
+    confirmedUsedDate = posMatches[0].sale_date;
+    posMatchStatus = '一致';
+  } else if (posMatches.length > 1) {
+    confirmedUsedDate = posMatches[0].sale_date;
+    posMatchStatus = '複数候補';
+  } else if (wasManual) {
+    // POSと一致しなかったが、手動で確定させた内容は消さずそのまま残す
+    confirmedUsedDate = r.used_date_confirmed;
+    posMatchStatus = '手動確認';
+  } else {
+    posMatchStatus = '売上データなし';
+  }
 
   let isExpired = null;
   if (confirmedUsedDate && r.expiry_date) {
@@ -1144,6 +1162,7 @@ async function rematchTicket(r) {
   else if (!isIssued) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
   else if (posMatchStatus === '売上データなし') { judgment = '要確認'; judgmentReason = '発券データとは一致していますが、お会計データに一致する記録が見つかりません'; }
   else if (posMatchStatus === '複数候補') { judgment = '要確認'; judgmentReason = `発券データとは一致していますが、お会計データに複数の候補があります(${matchSource})`; }
+  else if (posMatchStatus === '手動確認') { judgment = '正規の券'; judgmentReason = '手動修正(正規の券)'; }
   else { judgment = '正規の券'; judgmentReason = `発券データ・お会計データと一致(${matchSource})`; }
 
   const updateBody = {
