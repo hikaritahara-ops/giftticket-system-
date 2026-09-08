@@ -297,6 +297,23 @@
 
   .link { color: var(--accent2); text-decoration: none; font-size: 0.75rem; }
   .link:hover { text-decoration: underline; }
+  .edit-input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 5px;
+    font-family: inherit; font-size: 0.82rem; outline: none;
+  }
+  .edit-input:focus { border-color: var(--accent); }
+  .btn-manual-save {
+    background: var(--ok); color: white; border: none;
+    padding: 8px 20px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 0.85rem; font-weight: 500;
+    margin-top: 1.5rem; margin-right: 8px; transition: opacity 0.2s;
+  }
+  .btn-manual-save:hover { opacity: 0.85; }
+  .manual-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    border-radius: 8px; font-size: 0.65rem; background: rgba(139,92,246,0.15); color: #a78bfa;
+  }
 
   .btn-archive {
     background: none; border: 1px solid var(--border);
@@ -663,6 +680,7 @@
   <div class="modal">
     <h3 id="modal-title">詳細</h3>
     <div class="detail-grid" id="modal-content"></div>
+    <button class="btn-manual-save" onclick="saveManualEdit()">💾 保存</button>
     <button class="modal-close" onclick="closeModal()">閉じる</button>
   </div>
 </div>
@@ -911,24 +929,88 @@ function showDetail(ticketNumber) {
   const r = allData.find(d => d.ticket_number === ticketNumber);
   if (!r) return;
   document.getElementById('modal-title').textContent = `詳細 — ${r.ticket_number || ''}`;
+  const currentUsedDate = r.used_date_confirmed || r.used_date || '';
+  const isManual = r.pos_match_status === '手動確認';
   document.getElementById('modal-content').innerHTML = `
-    <div class="detail-item"><label>判定</label><span><span class="badge ${getBadgeClass(r.judgment)}">${r.judgment||'—'}</span></span></div>
+    <div class="detail-item">
+      <label>判定</label>
+      <select class="edit-input" id="edit-judgment">
+        <option value="正規の券" ${r.judgment==='正規の券'?'selected':''}>正規の券</option>
+        <option value="要確認" ${r.judgment==='要確認'?'selected':''}>要確認</option>
+        <option value="期限切れ使用" ${r.judgment==='期限切れ使用'?'selected':''}>期限切れ使用</option>
+        <option value="読取不能" ${r.judgment==='読取不能'?'selected':''}>読取不能</option>
+      </select>
+    </div>
     <div class="detail-item"><label>対応状況</label><span>${r.status||'—'}</span></div>
     <div class="detail-item"><label>券番号</label><span class="mono">${r.ticket_number||'—'}</span></div>
     <div class="detail-item"><label>コース種別</label><span>${r.course_type||'—'}</span></div>
     <div class="detail-item"><label>店舗名</label><span>${r.store_name||'—'}</span></div>
-    <div class="detail-item"><label>お客様名</label><span>${formatCustomerName(r)}</span></div>
-    <div class="detail-item"><label>利用日</label><span class="mono">${formatUsedDate(r)}</span></div>
+    <div class="detail-item">
+      <label>お客様名 ${isManual ? '<span class="manual-badge">手動確認</span>' : ''}</label>
+      <input type="text" class="edit-input" id="edit-customer-name" value="${(r.customer_name||'').replace(/"/g,'&quot;')}">
+    </div>
+    <div class="detail-item">
+      <label>利用日(確定日として保存されます)</label>
+      <input type="date" class="edit-input" id="edit-used-date" value="${currentUsedDate}">
+    </div>
     <div class="detail-item"><label>有効期限</label><span class="mono">${r.expiry_date||'—'}</span></div>
     <div class="detail-item"><label>旧料金(緑スタンプ)</label><span>${r.is_green_stamp ? '🟢 あり' : 'なし'}</span></div>
     <div class="detail-item"><label>額面金額</label><span class="mono">¥${(r.face_value||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>売上金額</label><span class="mono">¥${(r.sales_amount||0).toLocaleString()}</span></div>
     <div class="detail-item"><label>差額</label><span class="mono ${(r.amount_diff||0)>0?'amount-pos':''}">${r.amount_diff ? (r.amount_diff>0?'+':'')+r.amount_diff.toLocaleString() : '—'}</span></div>
-    <div class="detail-item"><label>判定理由</label><span>${r.judgment_reason||'—'}</span></div>
+    <div class="detail-item" style="grid-column:1/-1"><label>判定理由</label><span>${r.judgment_reason||'—'}</span></div>
     <div class="detail-item" style="grid-column:1/-1"><label>ファイルURL</label><span>${r.file_url ? `<a href="${r.file_url}" target="_blank" class="link">📎 画像を開く</a>` : '—'}</span></div>
   `;
+  document.getElementById('modal').dataset.ticketNumber = ticketNumber;
   document.getElementById('modal').classList.add('open');
 }
+
+async function saveManualEdit() {
+  const ticketNumber = document.getElementById('modal').dataset.ticketNumber;
+  const r = allData.find(d => d.ticket_number === ticketNumber);
+  if (!r) return;
+
+  const newJudgment = document.getElementById('edit-judgment').value;
+  const newCustomerName = document.getElementById('edit-customer-name').value.trim();
+  const newUsedDate = document.getElementById('edit-used-date').value || null;
+
+  if (!confirm(`券番号 ${ticketNumber} を以下の内容で保存します。よろしいですか?\n\n判定: ${newJudgment}\nお客様名: ${newCustomerName || '(空欄)'}\n利用日: ${newUsedDate || '(空欄)'}`)) {
+    return;
+  }
+
+  let isExpired = r.is_expired;
+  if (newUsedDate && r.expiry_date) {
+    const e = new Date(r.expiry_date), u = new Date(newUsedDate);
+    if (!isNaN(e.getTime()) && !isNaN(u.getTime())) isExpired = u.getTime() > e.getTime();
+  }
+
+  const updateBody = {
+    judgment: newJudgment,
+    judgment_reason: `手動修正(${newJudgment})`,
+    customer_name: newCustomerName,
+    used_date_confirmed: newUsedDate,
+    pos_match_status: '手動確認',
+    is_expired: isExpired
+  };
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify(updateBody)
+    });
+    if (res.ok) {
+      showToast('手動修正を保存しました', 'success');
+      closeModal();
+      loadData();
+    } else {
+      showToast('保存に失敗しました', 'error');
+    }
+  } catch(e) {
+    showToast('保存エラー: ' + e.message, 'error');
+  }
+}
+
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
 document.getElementById('modal').addEventListener('click', e => {
   if (e.target === document.getElementById('modal')) closeModal();
