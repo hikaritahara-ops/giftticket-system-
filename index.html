@@ -652,7 +652,10 @@
     <div class="card">
       <h2>
         <div class="left"><span class="step-num">3</span>保存済みデータを月・店舗別に見る</div>
-        <button class="btn-small" id="ticket-store-reload-btn">↻ 再読み込み</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn-small" id="ticket-store-reload-btn">↻ 再読み込み</button>
+          <button class="btn-small" id="ticket-export-btn" style="border-color:var(--ok);color:var(--ok)">📊 Excel出力</button>
+        </div>
       </h2>
       <div class="filter-row">
         <div class="filter-field">
@@ -1695,6 +1698,35 @@ function renderTicketStoreView() {
   body.innerHTML = html;
 }
 function toggleTicketStoreRow(idx) { document.getElementById(`ticket-store-row-${idx}`).classList.toggle('open'); }
+
+document.getElementById('ticket-export-btn').addEventListener('click', () => {
+  if (ticketAllSavedRows.length === 0) { showToast('先に「↻ 再読み込み」を押してデータを読み込んでください', 'error'); return; }
+  const month = document.getElementById('ticket-filter-month').value;
+  const destination = document.getElementById('ticket-filter-destination').value;
+  const filtered = ticketAllSavedRows.filter(r => {
+    if (month && (!r.issued_date || !r.issued_date.startsWith(month))) return false;
+    if (destination && r.destination !== destination) return false;
+    return true;
+  });
+  if (filtered.length === 0) { showToast('出力対象のデータがありません', 'error'); return; }
+  const sorted = filtered.slice().sort((a, b) => {
+    const da = a.destination || '', db = b.destination || '';
+    if (da !== db) return da.localeCompare(db, 'ja');
+    return (b.issued_date || '').localeCompare(a.issued_date || '');
+  });
+  const headers = ['出庫先', '券番号', 'コース', '出庫日'];
+  const rows = sorted.map(r => [r.destination || '', r.ticket_number || '', r.course || '', r.issued_date || '']);
+  const csv = [headers, ...rows].map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `発券データ_${new Date().toLocaleDateString('ja-JP').replace(/\//g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Excelファイルを出力しました', 'success');
+});
 </script>
 </body>
 </html>
