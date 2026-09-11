@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ギフチケ照合管理システム</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -28,6 +29,37 @@
     color: var(--text);
     min-height: 100vh;
   }
+
+  /* ==================== ログイン画面 ==================== */
+  .login-screen {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 500;
+  }
+  .login-box {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 2.5rem;
+    width: 90%;
+    max-width: 360px;
+  }
+  .login-box label { display:block; font-size:0.78rem; color:var(--text3); margin-bottom:6px; }
+  .login-field { margin-bottom: 1.2rem; }
+  .login-error {
+    color: var(--danger); font-size: 0.8rem; margin-top: 1rem;
+    display: none; line-height: 1.5;
+  }
+  .btn-logout {
+    background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 0.8rem; font-family: inherit;
+    transition: all 0.2s;
+  }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+  .user-email { font-size: 0.75rem; color: var(--text3); }
 
   header {
     background: var(--bg2);
@@ -438,14 +470,39 @@
 </head>
 <body>
 
+<!-- ============ ログイン画面 ============ -->
+<div class="login-screen" id="login-screen">
+  <div class="login-box">
+    <div class="logo" style="justify-content:center;margin-bottom:1.8rem">
+      <div class="logo-dot"></div>
+      ギフチケ照合管理システム
+    </div>
+    <div class="login-field">
+      <label>メールアドレス</label>
+      <input type="email" id="login-email" class="edit-input" autocomplete="username">
+    </div>
+    <div class="login-field">
+      <label>パスワード</label>
+      <input type="password" id="login-password" class="edit-input" autocomplete="current-password">
+    </div>
+    <button class="btn" style="width:100%" id="login-btn">ログイン</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ============ アプリ本体(ログイン後のみ表示) ============ -->
+<div id="app-root" style="display:none">
+
 <header>
   <div class="logo">
     <div class="logo-dot"></div>
     ギフチケ照合管理システム
   </div>
   <div class="header-right">
+    <span class="user-email" id="user-email"></span>
     <span id="last-updated" style="font-size:0.72rem;color:var(--text3)"></span>
     <button class="btn-config" onclick="toggleConfig()">⚙ 設定</button>
+    <button class="btn-logout" onclick="doLogout()">ログアウト</button>
   </div>
 </header>
 
@@ -699,18 +756,82 @@
 
 <div class="toast" id="toast"></div>
 
+</div><!-- /#app-root -->
+
 <script>
-/* ==================== 共通:接続設定・ページ切り替え ==================== */
+/* ==================== 共通:接続設定・認証・ページ切り替え ==================== */
 const DEFAULT_SUPABASE_URL = 'https://nyziybuxchsicnfkujij.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'sb_publishable_faUfMhKJTFPTaeFHeE8Z6A_qo23Wutl';
 
 let SUPABASE_URL = localStorage.getItem('supabase_url') || DEFAULT_SUPABASE_URL;
 let SUPABASE_KEY = localStorage.getItem('supabase_key') || DEFAULT_SUPABASE_KEY;
 
+let supabaseClient = null;
+let currentSession = null;
+
+// Supabaseへのfetch用ヘッダーを組み立てる。
+// apikeyはプロジェクト識別用(anon key)、Authorizationは「ログインした人」の証明書(JWT)。
+// RLSの `auth.role() = 'authenticated'` は、このAuthorizationトークンを見て判定される。
+function sbHeaders(extra) {
+  const token = currentSession ? currentSession.access_token : SUPABASE_KEY;
+  return Object.assign({ 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${token}` }, extra || {});
+}
+
+function initSupabaseClient() {
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+}
+
+async function initAuth() {
+  initSupabaseClient();
+  const { data } = await supabaseClient.auth.getSession();
+  currentSession = data.session;
+  if (currentSession) { showApp(); } else { showLogin(); }
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    currentSession = session;
+    if (session) { showApp(); } else { showLogin(); }
+  });
+}
+
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app-root').style.display = 'none';
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-root').style.display = 'block';
+  document.getElementById('user-email').textContent = currentSession.user.email;
+  loadData();
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errorBox = document.getElementById('login-error');
+  errorBox.style.display = 'none';
+  if (!email || !password) return;
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = 'ログイン中...';
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  btn.disabled = false; btn.textContent = 'ログイン';
+  if (error) {
+    errorBox.textContent = 'ログインに失敗しました。メールアドレスまたはパスワードをご確認ください。';
+    errorBox.style.display = 'block';
+  }
+}
+
+async function doLogout() {
+  await supabaseClient.auth.signOut();
+}
+
+document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('login-email').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
 window.onload = () => {
   document.getElementById('supabase-url').value = SUPABASE_URL;
   document.getElementById('supabase-key').value = SUPABASE_KEY;
-  loadData();
+  initAuth();
 };
 
 function toggleConfig() {
@@ -724,8 +845,11 @@ function saveConfig() {
   localStorage.setItem('supabase_url', SUPABASE_URL);
   localStorage.setItem('supabase_key', SUPABASE_KEY);
   document.getElementById('config-panel').classList.remove('open');
-  showToast('接続設定を保存しました', 'success');
-  loadData();
+  showToast('接続設定を保存しました。再ログインが必要です', 'success');
+  // URL/Keyが変わったのでクライアントを作り直し、再ログインさせる
+  currentSession = null;
+  initSupabaseClient();
+  showLogin();
 }
 
 function switchPage(pageId, btn) {
@@ -750,12 +874,8 @@ async function loadData() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return;
   document.getElementById('table-body').innerHTML = '<div class="loading"><div class="loading-spinner"></div>データを読み込み中...</div>';
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=*&order=used_date.desc&limit=500&apikey=${SUPABASE_KEY}`, {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-      }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=*&order=used_date.desc&limit=500`, {
+      headers: sbHeaders({ 'Content-Type': 'application/json' })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allData = await res.json();
@@ -898,10 +1018,7 @@ async function updateStatus(ticketNumber, status) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
       method: 'PATCH',
-      headers: {
-        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json', 'Prefer': 'return=minimal'
-      },
+      headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
       body: JSON.stringify({ status })
     });
     if (res.ok) {
@@ -917,10 +1034,7 @@ async function setArchived(ticketNumber, archived) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
       method: 'PATCH',
-      headers: {
-        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json', 'Prefer': 'return=minimal'
-      },
+      headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
       body: JSON.stringify({ archived })
     });
     if (res.ok) {
@@ -1013,7 +1127,7 @@ async function saveManualEdit() {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(ticketNumber)}`, {
       method: 'PATCH',
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
       body: JSON.stringify(updateBody)
     });
     if (res.ok) {
@@ -1087,7 +1201,7 @@ const STORE_POS_MAPPING = {
 
 async function fetchIssuedTicket(ticketNumber) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?ticket_number=eq.${encodeURIComponent(ticketNumber)}&select=issued_date,destination`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    headers: sbHeaders()
   });
   if (!res.ok) return null;
   const rows = await res.json();
@@ -1138,7 +1252,7 @@ async function rematchTicket(r) {
   // Sマークがあれば額面の80%、なければ額面そのものを「あるべき金額」として検索する
   const expectedAmount = r.has_s_mark ? Math.round(r.face_value * 0.8) : r.face_value;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?store_name=eq.${encodeURIComponent(posStoreName)}&sales_amount=eq.${expectedAmount}&select=sale_date,customer_name,imported_at,sales_amount`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    headers: sbHeaders()
   });
   const posRows = res.ok ? await res.json() : [];
   const { posMatches, matchSource } = findPosMatchesForRecord(r, posRows);
@@ -1197,7 +1311,7 @@ async function rematchTicket(r) {
 
   const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
     method: 'PATCH',
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
     body: JSON.stringify(updateBody)
   });
   return { ok: patchRes.ok, judgment };
@@ -1234,7 +1348,7 @@ let matchedPosKeys = new Set();
 async function loadMatchedPosKeys() {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,face_value,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      headers: sbHeaders()
     });
     if (!res.ok) { matchedPosKeys = new Set(); return; }
     const rows = await res.json();
@@ -1353,7 +1467,7 @@ document.getElementById('pos-upsert-btn').addEventListener('click', async () => 
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales`, {
         method: 'POST',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+        headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
         body: JSON.stringify(batch)
       });
       if (!res.ok) {
@@ -1393,7 +1507,7 @@ async function fetchAllPosSales(selectCols) {
   let all = []; let from = 0; const pageSize = 1000;
   while (true) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?select=${cols}&order=sale_date.desc`, {
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` }
+      headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const batch = await res.json();
@@ -1602,7 +1716,7 @@ document.getElementById('ticket-upsert-btn').addEventListener('click', async () 
     try {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?on_conflict=ticket_number`, {
         method: 'POST',
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+        headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
         body: JSON.stringify(batch)
       });
       if (!res.ok) {
@@ -1645,7 +1759,7 @@ async function fetchAllIssuedTickets(selectCols) {
   let all = []; let from = 0; const pageSize = 1000;
   while (true) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=${cols}&order=issued_date.desc`, {
-      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` }
+      headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const batch = await res.json();
