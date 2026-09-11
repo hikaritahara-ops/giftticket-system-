@@ -1135,7 +1135,9 @@ function findPosMatchesForRecord(r, posRows) {
 
 async function rematchTicket(r) {
   const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?store_name=eq.${encodeURIComponent(posStoreName)}&sales_amount=eq.${r.face_value}&select=sale_date,customer_name,imported_at`, {
+  // Sマークがあれば額面の80%、なければ額面そのものを「あるべき金額」として検索する
+  const expectedAmount = r.has_s_mark ? Math.round(r.face_value * 0.8) : r.face_value;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?store_name=eq.${encodeURIComponent(posStoreName)}&sales_amount=eq.${expectedAmount}&select=sale_date,customer_name,imported_at,sales_amount`, {
     headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
   });
   const posRows = res.ok ? await res.json() : [];
@@ -1168,6 +1170,10 @@ async function rematchTicket(r) {
   const issued = await fetchIssuedTicket(r.ticket_number);
   const isIssued = !!issued;
 
+  // 実際に一致したPOSレコードの金額(見つからなければ0)
+  const actualSalesAmount = posMatches.length > 0 ? (posMatches[0].sales_amount || 0) : 0;
+  const amountDiff = actualSalesAmount - expectedAmount;
+
   let judgment, judgmentReason;
   if (!r.ticket_number) { judgment = '読取不能'; judgmentReason = '券番号が読み取れませんでした'; }
   else if (isExpired === true) { judgment = '期限切れ使用'; judgmentReason = `有効期限(${r.expiry_date})を過ぎて使用されています(確定日: ${confirmedUsedDate})`; }
@@ -1185,7 +1191,8 @@ async function rematchTicket(r) {
     judgment_reason: judgmentReason,
     issued_date: isIssued ? issued.issued_date : null,
     issued_destination: isIssued ? issued.destination : null,
-    sales_amount: isIssued ? r.face_value : 0
+    sales_amount: actualSalesAmount,
+    amount_diff: amountDiff
   };
 
   const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
