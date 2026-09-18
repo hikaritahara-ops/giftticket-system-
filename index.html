@@ -1149,6 +1149,8 @@ document.getElementById('modal').addEventListener('click', e => {
 
 function exportExcel() {
   const search = document.getElementById('search-input').value.toLowerCase();
+  const dateFrom = document.getElementById('date-from').value;
+  const dateTo = document.getElementById('date-to').value;
   let filtered = allData.filter(r => {
     if (r.archived) return false;
     if (currentFilter !== 'all' && currentFilter !== 'archived' && (r.judgment||'') !== currentFilter) return false;
@@ -1156,6 +1158,9 @@ function exportExcel() {
       const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
       if (!s.includes(search)) return false;
     }
+    const usedDate = r.used_date_confirmed || r.used_date || '';
+    if (dateFrom && usedDate && usedDate < dateFrom) return false;
+    if (dateTo && usedDate && usedDate > dateTo) return false;
     return true;
   });
   const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','旧料金','額面','売上金額','差額','判定理由','対応状況'];
