@@ -1213,6 +1213,16 @@ async function fetchIssuedTicket(ticketNumber) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+// 名前の比較用に、スペース類・中黒・見えにくい区切り記号をまとめて除去してから「様」を取る
+// (手書きの苗字と名前の間を、AIがスペースではなく「・」等の記号として読み取ることがあるため、
+//  先に記号を全部消してから最後に「様」を取ることで、様の前にスペースが挟まっていても確実に除去できる)
+function normalizeName(name) {
+  return (name || '')
+    .replace(/[\s\u3000\u00A0・･‧,、。]/g, '')
+    .replace(/様$/, '')
+    .trim();
+}
+
 function findPosMatchesForRecord(r, posRows) {
   let ocrMonthDay = null;
   const dateSource = r.used_date_confirmed || r.used_date;
@@ -1220,7 +1230,7 @@ function findPosMatchesForRecord(r, posRows) {
     const parts = dateSource.split('-');
     if (parts.length === 3) ocrMonthDay = `${parts[1]}-${parts[2]}`;
   }
-  const ocrSurname = (r.customer_name || '').replace(/様$/, '').replace(/\s|\u3000/g, '').trim();
+  const ocrSurname = normalizeName(r.customer_name);
 
   function importBatchDate(p) { return (p.imported_at || '').slice(0, 10); }
   const importDates = posRows.map(importBatchDate).filter(Boolean);
@@ -1232,7 +1242,7 @@ function findPosMatchesForRecord(r, posRows) {
     return rows.filter(p => {
       if (!p.sale_date) return false;
       const pMonthDay = p.sale_date.slice(5);
-      const pName = (p.customer_name || '').replace(/\s|\u3000/g, '');
+      const pName = normalizeName(p.customer_name);
       if (!pName) return false;
       const nameMatches = pName.includes(ocrSurname) || ocrSurname.includes(pName);
       return pMonthDay === ocrMonthDay && nameMatches;
@@ -1352,19 +1362,19 @@ let matchedPosKeys = new Set();
 // 照合結果(matching_results)から、すでに読み取り済み(POSと一致済み)のデータのキー一覧を作る
 async function loadMatchedPosKeys() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,face_value,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,sales_amount,customer_name,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
       headers: sbHeaders()
     });
     if (!res.ok) { matchedPosKeys = new Set(); return; }
     const rows = await res.json();
     matchedPosKeys = new Set(rows.filter(r => r.used_date_confirmed).map(r => {
       const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-      return `${posStoreName}|${r.used_date_confirmed}|${r.face_value}`;
+      return `${posStoreName}|${r.used_date_confirmed}|${r.sales_amount}|${normalizeName(r.customer_name)}`;
     }));
   } catch(e) { matchedPosKeys = new Set(); }
 }
 function isPosRowMatched(r) {
-  return matchedPosKeys.has(`${r.store_name}|${r.sale_date}|${r.sales_amount}`);
+  return matchedPosKeys.has(`${r.store_name}|${r.sale_date}|${r.sales_amount}|${normalizeName(r.customer_name)}`);
 }
 
 const posDropzone = document.getElementById('pos-dropzone');
