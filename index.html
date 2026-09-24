@@ -1223,6 +1223,14 @@ function normalizeName(name) {
     .trim();
 }
 
+// 金額をキーに使う前に、数値として読み直して整数化する
+// (DBの列の型によって "26400" と "26400.00" のように表記が変わることがあり、
+//  文字列のまま比較すると一致しなくなるため)
+function normalizeAmount(amount) {
+  const n = Number(amount);
+  return isNaN(n) ? 0 : Math.round(n);
+}
+
 function findPosMatchesForRecord(r, posRows) {
   let ocrMonthDay = null;
   const dateSource = r.used_date_confirmed || r.used_date;
@@ -1369,12 +1377,12 @@ async function loadMatchedPosKeys() {
     const rows = await res.json();
     matchedPosKeys = new Set(rows.filter(r => r.used_date_confirmed).map(r => {
       const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-      return `${posStoreName}|${r.used_date_confirmed}|${r.sales_amount}|${normalizeName(r.customer_name)}`;
+      return `${posStoreName}|${r.used_date_confirmed}|${normalizeAmount(r.sales_amount)}|${normalizeName(r.customer_name)}`;
     }));
   } catch(e) { matchedPosKeys = new Set(); }
 }
 function isPosRowMatched(r) {
-  return matchedPosKeys.has(`${r.store_name}|${r.sale_date}|${r.sales_amount}|${normalizeName(r.customer_name)}`);
+  return matchedPosKeys.has(`${r.store_name}|${r.sale_date}|${normalizeAmount(r.sales_amount)}|${normalizeName(r.customer_name)}`);
 }
 
 const posDropzone = document.getElementById('pos-dropzone');
