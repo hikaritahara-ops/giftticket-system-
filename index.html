@@ -1149,8 +1149,6 @@ document.getElementById('modal').addEventListener('click', e => {
 
 function exportExcel() {
   const search = document.getElementById('search-input').value.toLowerCase();
-  const dateFrom = document.getElementById('date-from').value;
-  const dateTo = document.getElementById('date-to').value;
   let filtered = allData.filter(r => {
     if (r.archived) return false;
     if (currentFilter !== 'all' && currentFilter !== 'archived' && (r.judgment||'') !== currentFilter) return false;
@@ -1158,9 +1156,6 @@ function exportExcel() {
       const s = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
       if (!s.includes(search)) return false;
     }
-    const usedDate = r.used_date_confirmed || r.used_date || '';
-    if (dateFrom && usedDate && usedDate < dateFrom) return false;
-    if (dateTo && usedDate && usedDate > dateTo) return false;
     return true;
   });
   const headers = ['判定','券番号','コース','店舗名','お客様名','利用日','有効期限','旧料金','額面','売上金額','差額','判定理由','対応状況'];
@@ -1221,14 +1216,6 @@ function normalizeName(name) {
     .replace(/[\s\u3000\u00A0・･‧,、。]/g, '')
     .replace(/様$/, '')
     .trim();
-}
-
-// 金額をキーに使う前に、数値として読み直して整数化する
-// (DBの列の型によって "26400" と "26400.00" のように表記が変わることがあり、
-//  文字列のまま比較すると一致しなくなるため)
-function normalizeAmount(amount) {
-  const n = Number(amount);
-  return isNaN(n) ? 0 : Math.round(n);
 }
 
 function findPosMatchesForRecord(r, posRows) {
@@ -1365,24 +1352,34 @@ async function rematchAllPending() {
 let posParsedRows = [];
 let posExistingKeys = new Set();
 let posAllSavedRows = [];
-let matchedPosKeys = new Set();
+let matchedPosKeys = new Map();
 
-// 照合結果(matching_results)から、すでに読み取り済み(POSと一致済み)のデータのキー一覧を作る
+// 照合結果(matching_results)から、すでに読み取り済み(POSと一致済み)の「店舗|日付」ごとのお客様名一覧を作る
 async function loadMatchedPosKeys() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,sales_amount,customer_name,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,customer_name,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
       headers: sbHeaders()
     });
-    if (!res.ok) { matchedPosKeys = new Set(); return; }
+    if (!res.ok) { matchedPosKeys = new Map(); return; }
     const rows = await res.json();
-    matchedPosKeys = new Set(rows.filter(r => r.used_date_confirmed).map(r => {
+    const m = new Map();
+    rows.filter(r => r.used_date_confirmed).forEach(r => {
       const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-      return `${posStoreName}|${r.used_date_confirmed}|${normalizeAmount(r.sales_amount)}|${normalizeName(r.customer_name)}`;
-    }));
-  } catch(e) { matchedPosKeys = new Set(); }
+      const key = `${posStoreName}|${r.used_date_confirmed}`;
+      const name = normalizeName(r.customer_name);
+      if (!name) return;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(name);
+    });
+    matchedPosKeys = m;
+  } catch(e) { matchedPosKeys = new Map(); }
 }
 function isPosRowMatched(r) {
-  return matchedPosKeys.has(`${r.store_name}|${r.sale_date}|${normalizeAmount(r.sales_amount)}|${normalizeName(r.customer_name)}`);
+  const names = matchedPosKeys.get(`${r.store_name}|${r.sale_date}`);
+  if (!names) return false;
+  const pName = normalizeName(r.customer_name);
+  if (!pName) return false;
+  return names.some(n => pName.includes(n) || n.includes(pName));
 }
 
 const posDropzone = document.getElementById('pos-dropzone');
