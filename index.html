@@ -673,7 +673,7 @@
         </div>
       </div>
       <div class="hint">「対象月」と「期間(開始日・終了日)」は両方指定すると、両方の条件を満たすものだけに絞り込まれます。期間だけ使いたい場合は「対象月」を「すべての月」のままにしてください。</div>
-      <div class="hint" id="pos-store-view-hint">「再読み込み」を押すと、Supabaseに保存済みの全お会計データを店舗別に集計して表示します。店舗名をクリックすると明細が開きます。</div>
+      <div class="hint" id="pos-store-view-hint">このタブを開くと、Supabaseに保存済みのお会計データを自動で読み込み、店舗別に表示します(最新の月を表示。最新にしたいときは「再読み込み」)。店舗名をクリックすると明細が開きます。</div>
       <div id="pos-store-view-body" style="margin-top:1rem"></div>
     </div>
 
@@ -738,7 +738,7 @@
           <button class="btn-small" id="ticket-filter-apply-btn">絞り込む</button>
         </div>
       </div>
-      <div class="hint" id="ticket-store-view-hint">「再読み込み」を押すと、Supabaseに保存済みの全発券データを出庫先(店舗)別に集計して表示します。出庫先名をクリックすると明細が開きます。</div>
+      <div class="hint" id="ticket-store-view-hint">このタブを開くと、Supabaseに保存済みの発券データを自動で読み込み、出庫先(店舗)別に表示します(最新の月を表示。最新にしたいときは「再読み込み」)。出庫先名をクリックすると明細が開きます。</div>
       <div id="ticket-store-view-body" style="margin-top:1rem"></div>
     </div>
 
@@ -858,7 +858,14 @@ function switchPage(pageId, btn) {
   document.getElementById(pageId).classList.add('active');
   document.querySelectorAll('.main-nav-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
+  // タブを初めて開いたとき、保存済みデータを自動で読み込む(「再読み込み」を押さなくてよい)
+  if (pageId === 'page-pos' && !posViewLoaded) loadPosStoreView();
+  if (pageId === 'page-ticket' && !ticketViewLoaded) loadTicketStoreView();
 }
+let posViewLoaded = false;
+let ticketViewLoaded = false;
+let posMonthInit = false;
+let ticketMonthInit = false;
 
 function showToast(msg, type='success') {
   const t = document.getElementById('toast');
@@ -1592,6 +1599,7 @@ async function loadPosStoreView() {
     await loadMatchedPosKeys();
     hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、ギフチケ照合ですでにこのお会計データと一致が確認できている行です。`;
     populatePosMonthFilter();
+    posViewLoaded = true;
     renderPosStoreView();
   } catch (e) { hint.textContent = '読み込みに失敗しました: ' + e.message; }
 }
@@ -1604,6 +1612,9 @@ function populatePosMonthFilter() {
   const current = select.value;
   select.innerHTML = '<option value="">すべての月</option>' + sortedMonths.map(m => `<option value="${m}">${m}</option>`).join('');
   select.value = current;
+  // 初回だけ、データのある最新の月を自動で選ぶ
+  if (!posMonthInit && !current && sortedMonths.length) { select.value = sortedMonths[0]; }
+  posMonthInit = true;
 }
 
 function renderPosStoreView() {
@@ -1843,6 +1854,7 @@ async function loadTicketStoreView() {
     ticketAllSavedRows = await fetchAllIssuedTickets(['ticket_number','course','issued_date','destination']);
     hint.textContent = `保存済み ${ticketAllSavedRows.length.toLocaleString()} 件を読み込みました。出庫先名をクリックすると明細が開きます。`;
     populateTicketFilters();
+    ticketViewLoaded = true;
     renderTicketStoreView();
   } catch (e) { hint.textContent = '読み込みに失敗しました: ' + e.message; }
 }
@@ -1859,6 +1871,9 @@ function populateTicketFilters() {
   const curMonth = monthSelect.value;
   monthSelect.innerHTML = '<option value="">すべての月</option>' + sortedMonths.map(m => `<option value="${m}">${m}</option>`).join('');
   monthSelect.value = curMonth;
+  // 初回だけ、データのある最新の月を自動で選ぶ
+  if (!ticketMonthInit && !curMonth && sortedMonths.length) { monthSelect.value = sortedMonths[0]; }
+  ticketMonthInit = true;
 
   const sortedDest = Array.from(destinations).sort();
   const destSelect = document.getElementById('ticket-filter-destination');
