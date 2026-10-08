@@ -749,24 +749,35 @@
   <div class="page" id="page-sold">
 
     <div class="card">
-      <h2><div class="left"><span class="step-num">1</span>ギフチケ管理表(マスターExcel)を読み込む</div></h2>
+      <h2><div class="left"><span class="step-num">1</span>店舗別の在庫管理表(Excel)を読み込む</div></h2>
       <div class="dropzone" id="sold-dropzone">
         <div class="icon">🛒</div>
-        <div>ここにExcelファイルをドラッグ&ドロップ<br>またはクリックして選択</div>
-        <small>「ギフチケ管理 ….xlsx」を選んでください(中の「通常」「ライン」タブから、販売された券を自動で読み取ります)</small>
+        <div>ここにExcelファイルをドラッグ&ドロップ(<b>複数ファイルをまとめて</b>OK)<br>またはクリックして選択</div>
+        <small>各店舗から集めた在庫管理表(ギフトチケット在庫状況)を、17店舗分まとめて選べます。各タブのナンバリング・販売日・販売金額・会員№を読み取ります。</small>
       </div>
-      <input type="file" id="sold-file-input" accept=".xlsx,.xls" style="display:none">
+      <input type="file" id="sold-file-input" accept=".xlsx,.xls" multiple style="display:none">
       <div class="filename" id="sold-filename"></div>
+      <div class="hint" style="margin-top:.8rem">個人情報の扱い: <b>お名前・会員№</b>は保存しますが、<b>電話番号は読み取りません</b>。</div>
+      <details style="margin-top:1rem">
+        <summary style="cursor:pointer;color:var(--text2);font-size:.85rem">過去分の一括取り込み(初回のみ): ギフチケ管理表(マスターExcel)から読み込む</summary>
+        <div class="dropzone" id="sold-master-dropzone" style="margin-top:.8rem">
+          <div class="icon">📚</div>
+          <div>「ギフチケ管理 ….xlsx」をここにドラッグ または クリック</div>
+          <small>「通常」「ライン」タブの、販売経路(ECサイト・LINE・店舗)・販売金額・使用状況を取り込みます。ECとLINEの販売分は、今のところこちらからのみ取り込めます。</small>
+        </div>
+        <input type="file" id="sold-master-input" accept=".xlsx,.xls" style="display:none">
+      </details>
     </div>
 
     <div class="card" id="sold-preview-card" style="display:none">
       <h2><div class="left"><span class="step-num">2</span>プレビュー・件数確認</div></h2>
       <div class="stats-row" id="sold-stats-row"></div>
       <div class="hint" id="sold-hint"></div>
+      <div id="sold-file-summary" class="table-scroll" style="margin-bottom:1rem"></div>
       <div class="table-scroll">
         <table>
           <thead>
-            <tr><th>券番号</th><th>販売日</th><th>販売経路</th><th>販売金額</th><th>使用状況</th><th>使用月</th><th>使用店舗</th><th>備考</th></tr>
+            <tr id="sold-preview-thead"></tr>
           </thead>
           <tbody id="sold-preview-tbody"></tbody>
         </table>
@@ -2024,98 +2035,194 @@ document.getElementById('ticket-export-btn').addEventListener('click', () => {
   showToast('Excelファイルを出力しました', 'success');
 });
 
-/* ==================== ページ4: 販売データ(ギフチケ管理表マスター)取り込み ==================== */
+/* ==================== ページ4: 販売データ取り込み ==================== */
 let soldParsedRows = [];
+let soldMode = 'store';      // 'store'=店舗別在庫管理表 / 'master'=ギフチケ管理表(マスター)
 let soldSkipped = 0;
+let soldFileSummary = [];
 let soldAllSavedRows = [];
 
-const soldDropzone = document.getElementById('sold-dropzone');
+function bindDrop(zone, input, handler) {
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); if (e.dataTransfer.files.length) handler(Array.from(e.dataTransfer.files)); });
+  input.addEventListener('change', e => { if (e.target.files.length) handler(Array.from(e.target.files)); });
+}
 const soldFileInput = document.getElementById('sold-file-input');
-soldDropzone.addEventListener('click', () => soldFileInput.click());
-soldDropzone.addEventListener('dragover', e => { e.preventDefault(); soldDropzone.classList.add('dragover'); });
-soldDropzone.addEventListener('dragleave', () => soldDropzone.classList.remove('dragover'));
-soldDropzone.addEventListener('drop', e => {
-  e.preventDefault(); soldDropzone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) handleSoldFile(e.dataTransfer.files[0]);
-});
-soldFileInput.addEventListener('change', e => { if (e.target.files.length) handleSoldFile(e.target.files[0]); });
+bindDrop(document.getElementById('sold-dropzone'), soldFileInput, files => handleSoldStoreFiles(files));
+bindDrop(document.getElementById('sold-master-dropzone'), document.getElementById('sold-master-input'), files => handleSoldMasterFile(files[0]));
 
-async function handleSoldFile(file) {
-  document.getElementById('sold-filename').textContent = `読み込み中: ${file.name}`;
+// ---- 店舗別在庫管理表 ----
+const SOLD_MISS_RE = /ミス|ﾐｽ|押し損|押損|不良|破損|汚損|損じ/;
+function soldNorm(v) { return String(v == null ? '' : v).normalize('NFKC').trim(); }
+function soldParseDate(v) {
+  if (v instanceof Date) {
+    const d = ticketToIsoDate(v);
+    const y = parseInt(d.slice(0, 4), 10);
+    return (y >= 2019 && y <= new Date().getFullYear() + 1) ? { date: d } : { bad: true };
+  }
+  const t = soldNorm(v);
+  if (!t) return { blank: true };
+  let m = t.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
+  if (!m) { m = t.match(/^(\d{4})(\d{1,2})[\/\-.](\d{1,2})$/); }   // 「20206/27」→ 2020/6/27
+  if (m) {
+    const y = +m[1], mo = +m[2], da = +m[3];
+    if (y >= 2019 && y <= new Date().getFullYear() + 1 && mo >= 1 && mo <= 12 && da >= 1 && da <= 31) return { date: `${y}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}` };
+  }
+  return { bad: true, text: t };
+}
+
+async function handleSoldStoreFiles(files) {
+  soldMode = 'store';
+  const fname = document.getElementById('sold-filename');
+  const map = new Map(); const summary = []; let dupAcross = 0;
+  for (let fi = 0; fi < files.length; fi++) {
+    const file = files[fi];
+    fname.textContent = `読み込み中 ${fi + 1} / ${files.length}: ${file.name}`;
+    await new Promise(r => setTimeout(r, 30)); // 画面の表示を更新させる
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true, sheetRows: 6000 });
+      const info = { file: file.name, store: '', sheets: 0, sold: 0, miss: 0, stock: 0, bad: 0, stockLabel: 0, err: '' };
+      wb.SheetNames.forEach(sn => {
+        if (sn === '入力例' || sn === 'Sheet1') return;
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: null });
+        const header = rows.findIndex(r => r && soldNorm(r[1]) === 'ナンバリング');
+        if (header < 0) return;
+        const store = soldNorm((rows[2] || [])[1]);
+        if (store && !info.store) info.store = store;
+        const lbl = Number((rows[3] || [])[3]); if (Number.isFinite(lbl)) info.stockLabel += lbl;
+        info.sheets++;
+        rows.slice(header + 1).forEach(r => {
+          const no = soldNorm(r[1]).replace(/（例）|\(例\)/g, '');
+          if (soldNorm(r[0]) === '例）' || !/^[A-Z]\d{7}$/.test(no)) return;
+          const dv = soldParseDate(r[2]);
+          const name = soldNorm(r[4]); const member = soldNorm(r[5]);
+          const amtRaw = soldNorm(r[3]) === '' ? NaN : Number(soldNorm(r[3]).replace(/[,¥￥円]/g, ''));
+          const isMiss = SOLD_MISS_RE.test(soldNorm(r[2])) || SOLD_MISS_RE.test(name) || SOLD_MISS_RE.test(soldNorm(r[3]));
+          const hasSale = !!dv.date || dv.bad;
+          if (!isMiss && !hasSale && !name && !Number.isFinite(amtRaw)) { info.stock++; return; } // 在庫(未販売)は取り込まない
+          let status = '販売済', note = null;
+          if (isMiss) { status = 'ミス'; note = soldNorm(r[2]) || name || null; info.miss++; }
+          else if (dv.bad || !dv.date) { status = '日付要確認'; note = dv.text || null; info.bad++; }
+          else info.sold++;
+          const row = {
+            ticket_number: no, course: no.charAt(0),
+            sale_date: isMiss ? null : (dv.date || null),
+            sale_channel: store || info.store || file.name.replace(/\.[^.]+$/, ''),
+            sale_amount: (!isMiss && Number.isFinite(amtRaw)) ? Math.round(amtRaw) : null,
+            customer_name: isMiss ? null : (name || null),
+            member_no: isMiss ? null : (member || null),
+            row_status: status, miss_note: note,
+            source_file: file.name, store_sheet: sn,
+            updated_at: new Date().toISOString()
+          };
+          if (map.has(no)) dupAcross++;
+          map.set(no, row);
+        });
+      });
+      if (info.sheets === 0) info.err = '「ナンバリング」の表が見つかりません';
+      summary.push(info);
+    } catch (e) {
+      summary.push({ file: file.name, store: '', sheets: 0, sold: 0, miss: 0, stock: 0, bad: 0, stockLabel: 0, err: e.message });
+    }
+  }
+  soldParsedRows = Array.from(map.values());
+  soldFileSummary = summary;
+  soldSkipped = dupAcross;
+  fname.textContent = `読み込み完了: ${files.length}ファイル`;
+  if (soldParsedRows.length === 0) { alert('販売の記録を1件も読み取れませんでした。ファイルの形式を確認してください。'); return; }
+  renderSoldPreview();
+}
+
+// ---- 過去分: ギフチケ管理表(マスターExcel) ----
+async function handleSoldMasterFile(file) {
+  soldMode = 'master';
+  const fname = document.getElementById('sold-filename');
+  fname.textContent = `読み込み中: ${file.name}`;
   try {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array', cellDates: true });
     const targets = ['通常', 'ライン'].filter(n => wb.SheetNames.includes(n));
-    if (targets.length === 0) {
-      alert('「通常」「ライン」というタブが見つかりませんでした。ギフチケ管理表のExcelを選んでいるか確認してください。\n見つかったタブ: ' + wb.SheetNames.join(', '));
-      document.getElementById('sold-filename').textContent = '';
-      return;
-    }
+    if (targets.length === 0) { alert('「通常」「ライン」というタブが見つかりませんでした。ギフチケ管理表のExcelを選んでいるか確認してください。\n見つかったタブ: ' + wb.SheetNames.join(', ')); fname.textContent = ''; return; }
     const map = new Map(); let skipped = 0;
     targets.forEach(name => {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
       rows.slice(1).forEach(r => {
         const no = String(r[1] == null ? '' : r[1]).trim();
-        if (!/^[A-Z]\d{7}$/.test(no)) { if (no) skipped++; return; } // 「残高」「期末調整」などの行は除外
-        const use = r[4];
-        let usageStatus = null, usageMonth = null;
-        if (use instanceof Date) { usageStatus = '使用済'; usageMonth = ticketToIsoDate(use); }
-        else if (use && String(use).trim()) { usageStatus = String(use).trim(); }
+        if (!/^[A-Z]\d{7}$/.test(no)) { if (no) skipped++; return; }
+        const use = r[4]; let us = null, um = null;
+        if (use instanceof Date) { us = '使用済'; um = ticketToIsoDate(use); }
+        else if (use && String(use).trim()) { us = String(use).trim(); }
         const amt = Number(r[9]);
         map.set(no, {
-          ticket_number: no,
-          course: no.charAt(0),
-          sale_date: ticketToIsoDate(r[2]),
+          ticket_number: no, course: no.charAt(0), sale_date: ticketToIsoDate(r[2]),
           sale_channel: r[3] ? String(r[3]).trim() : null,
           sale_amount: Number.isFinite(amt) ? Math.round(amt) : null,
-          expiry_date: ticketToIsoDate(r[6]),
-          remark: r[7] ? String(r[7]).trim() : null,
-          usage_status: usageStatus,
-          usage_month: usageMonth,
-          used_store: r[5] ? String(r[5]).trim() : null,
-          source_sheet: name,
-          updated_at: new Date().toISOString()
+          expiry_date: ticketToIsoDate(r[6]), remark: r[7] ? String(r[7]).trim() : null,
+          usage_status: us, usage_month: um, used_store: r[5] ? String(r[5]).trim() : null,
+          source_sheet: name, updated_at: new Date().toISOString()
         });
       });
     });
-    soldParsedRows = Array.from(map.values());
-    soldSkipped = skipped;
-    document.getElementById('sold-filename').textContent = `選択中: ${file.name}(読み取ったタブ: ${targets.join('・')})`;
-    if (soldParsedRows.length === 0) { alert('券番号を1件も読み取れませんでした。シートの形式を確認してください。'); return; }
+    soldParsedRows = Array.from(map.values()); soldSkipped = skipped; soldFileSummary = [];
+    fname.textContent = `選択中: ${file.name}(読み取ったタブ: ${targets.join('・')})`;
+    if (soldParsedRows.length === 0) { alert('券番号を1件も読み取れませんでした。'); return; }
     renderSoldPreview();
-  } catch (e) {
-    alert('Excelの読み込みに失敗しました: ' + e.message);
-    document.getElementById('sold-filename').textContent = '';
-  }
+  } catch (e) { alert('Excelの読み込みに失敗しました: ' + e.message); fname.textContent = ''; }
 }
 
 function renderSoldPreview() {
   document.getElementById('sold-preview-card').style.display = 'block';
   const total = soldParsedRows.length;
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const sumAmt = soldParsedRows.reduce((a, r) => a + (r.sale_amount || 0), 0);
-  const used = soldParsedRows.filter(r => r.usage_status === '使用済').length;
-  const expired = soldParsedRows.filter(r => r.usage_status === '期限切れ').length;
-  const unused = total - used - expired;
-  const noDate = soldParsedRows.filter(r => !r.sale_date).length;
-  document.getElementById('sold-stats-row').innerHTML = `
-    <div class="stat-box total"><div class="val">${total.toLocaleString()}</div><div class="lbl">販売された券</div></div>
-    <div class="stat-box"><div class="val">¥${sumAmt.toLocaleString()}</div><div class="lbl">販売金額 合計</div></div>
-    <div class="stat-box"><div class="val">${used.toLocaleString()}</div><div class="lbl">使用済</div></div>
-    <div class="stat-box"><div class="val">${expired.toLocaleString()}</div><div class="lbl">期限切れ</div></div>
-    <div class="stat-box"><div class="val">${unused.toLocaleString()}</div><div class="lbl">未使用(残)</div></div>`;
-  document.getElementById('sold-hint').textContent =
-    `券番号の形式の行だけを取り込みます(「残高」「期末調整」などの集計行 ${soldSkipped}行は除外)。販売日が読めない券: ${noDate}件。既存の券番号は上書き更新、新しい券番号は追加されます(Upsert)。`;
-  const preview = soldParsedRows.slice(0, 200);
-  let html = preview.map(r => `
-    <tr>
-      <td class="mono">${r.ticket_number}</td><td>${r.sale_date || '—'}</td><td>${r.sale_channel || '—'}</td>
-      <td class="mono">${r.sale_amount != null ? '¥' + r.sale_amount.toLocaleString() : '—'}</td>
-      <td>${r.usage_status || '—'}</td><td>${r.usage_month ? r.usage_month.slice(0, 7) : '—'}</td>
-      <td>${r.used_store || '—'}</td><td>${r.remark || '—'}</td>
-    </tr>`).join('');
+  let stats, hint, thead, rowHtml;
+  if (soldMode === 'store') {
+    const sold = soldParsedRows.filter(r => r.row_status === '販売済').length;
+    const miss = soldParsedRows.filter(r => r.row_status === 'ミス').length;
+    const bad = soldParsedRows.filter(r => r.row_status === '日付要確認').length;
+    const stock = soldFileSummary.reduce((a, i) => a + i.stock, 0);
+    stats = `
+      <div class="stat-box total"><div class="val">${total.toLocaleString()}</div><div class="lbl">取り込む券</div></div>
+      <div class="stat-box"><div class="val">${sold.toLocaleString()}</div><div class="lbl">販売済</div></div>
+      <div class="stat-box"><div class="val">¥${sumAmt.toLocaleString()}</div><div class="lbl">販売金額 合計</div></div>
+      <div class="stat-box"><div class="val">${miss.toLocaleString()}</div><div class="lbl">ミス(印字ミス等)</div></div>
+      <div class="stat-box"><div class="val">${bad.toLocaleString()}</div><div class="lbl">日付が読めない</div></div>
+      <div class="stat-box"><div class="val">${stock.toLocaleString()}</div><div class="lbl">在庫(取り込まない)</div></div>`;
+    hint = `ファイル ${soldFileSummary.length}件を読み取りました。在庫(販売日・金額・お名前が空欄)の券は取り込みません。同じ券番号が複数の場所にあった: ${soldSkipped}件(後のものを採用)。既存の券番号は上書き更新、新しい券番号は追加されます(Upsert)。`;
+    thead = '<th>券番号</th><th>販売日</th><th>店舗</th><th>販売金額</th><th>お名前</th><th>会員№</th><th>状態</th><th>メモ</th>';
+    rowHtml = r => `<tr><td class="mono">${esc(r.ticket_number)}</td><td>${r.sale_date || '—'}</td><td>${esc(r.sale_channel) || '—'}</td><td class="mono">${r.sale_amount != null ? '¥' + r.sale_amount.toLocaleString() : '—'}</td><td>${esc(r.customer_name) || '—'}</td><td>${esc(r.member_no) || '—'}</td><td>${esc(r.row_status)}</td><td>${esc(r.miss_note) || ''}</td></tr>`;
+    // ファイル別の内訳
+    const sumHtml = `<table><thead><tr><th>ファイル</th><th>店舗</th><th>タブ数</th><th>販売済</th><th>ミス</th><th>日付が読めない</th><th>在庫(実数)</th><th>在庫(表記)</th><th>確認</th></tr></thead><tbody>` +
+      soldFileSummary.map(i => {
+        const okStock = i.stockLabel === i.stock;
+        return `<tr><td>${esc(i.file)}</td><td>${esc(i.store) || '—'}</td><td>${i.sheets}</td><td class="mono">${i.sold}</td><td class="mono">${i.miss}</td><td class="mono">${i.bad}</td><td class="mono">${i.stock}</td><td class="mono">${i.stockLabel}</td><td>${i.err ? '⚠ ' + esc(i.err) : (okStock ? '✓' : '⚠ 在庫数が表記と違う')}</td></tr>`;
+      }).join('') + '</tbody></table>';
+    document.getElementById('sold-file-summary').innerHTML = sumHtml;
+  } else {
+    const used = soldParsedRows.filter(r => r.usage_status === '使用済').length;
+    const expired = soldParsedRows.filter(r => r.usage_status === '期限切れ').length;
+    const noDate = soldParsedRows.filter(r => !r.sale_date).length;
+    stats = `
+      <div class="stat-box total"><div class="val">${total.toLocaleString()}</div><div class="lbl">販売された券</div></div>
+      <div class="stat-box"><div class="val">¥${sumAmt.toLocaleString()}</div><div class="lbl">販売金額 合計</div></div>
+      <div class="stat-box"><div class="val">${used.toLocaleString()}</div><div class="lbl">使用済</div></div>
+      <div class="stat-box"><div class="val">${expired.toLocaleString()}</div><div class="lbl">期限切れ</div></div>
+      <div class="stat-box"><div class="val">${(total - used - expired).toLocaleString()}</div><div class="lbl">未使用(残)</div></div>`;
+    hint = `マスターExcelの券番号の行だけを取り込みます(「残高」「期末調整」などの集計行 ${soldSkipped}行は除外)。販売日が読めない券: ${noDate}件。`;
+    thead = '<th>券番号</th><th>販売日</th><th>販売経路</th><th>販売金額</th><th>使用状況</th><th>使用月</th><th>使用店舗</th><th>備考</th>';
+    rowHtml = r => `<tr><td class="mono">${esc(r.ticket_number)}</td><td>${r.sale_date || '—'}</td><td>${esc(r.sale_channel) || '—'}</td><td class="mono">${r.sale_amount != null ? '¥' + r.sale_amount.toLocaleString() : '—'}</td><td>${esc(r.usage_status) || '—'}</td><td>${r.usage_month ? r.usage_month.slice(0, 7) : '—'}</td><td>${esc(r.used_store) || '—'}</td><td>${esc(r.remark) || '—'}</td></tr>`;
+    document.getElementById('sold-file-summary').innerHTML = '';
+  }
+  document.getElementById('sold-stats-row').innerHTML = stats;
+  document.getElementById('sold-hint').textContent = hint;
+  document.getElementById('sold-preview-thead').innerHTML = thead;
+  let html = soldParsedRows.slice(0, 200).map(rowHtml).join('');
   if (total > 200) html += `<tr><td colspan="8" style="text-align:center;color:var(--text3)">...ほか${(total - 200).toLocaleString()}件</td></tr>`;
   document.getElementById('sold-preview-tbody').innerHTML = html;
-  document.getElementById('sold-upsert-count').textContent = total.toLocaleString();
+  document.getElementById('sold-upsert-btn').innerHTML = `<span id="sold-upsert-count">${total.toLocaleString()}</span>件をsold_ticketsへUpsert`;
   document.getElementById('sold-upsert-btn').disabled = false;
 }
 
@@ -2161,10 +2268,10 @@ document.getElementById('sold-upsert-btn').addEventListener('click', async () =>
 });
 
 document.getElementById('sold-reset-btn').addEventListener('click', () => {
-  soldParsedRows = [];
+  soldParsedRows = []; soldFileSummary = [];
   document.getElementById('sold-preview-card').style.display = 'none';
   document.getElementById('sold-filename').textContent = '';
-  soldFileInput.value = '';
+  soldFileInput.value = ''; document.getElementById('sold-master-input').value = '';
   document.getElementById('sold-progress-wrap').style.display = 'none';
   document.getElementById('sold-log-box').style.display = 'none';
   document.getElementById('sold-upsert-btn').disabled = false;
@@ -2196,7 +2303,7 @@ async function loadSoldView() {
   const body = document.getElementById('sold-store-view-body');
   hint.textContent = '読み込み中...'; body.innerHTML = '';
   try {
-    soldAllSavedRows = await fetchAllSoldTickets(['ticket_number', 'sale_date', 'sale_channel', 'sale_amount', 'usage_status']);
+    soldAllSavedRows = await fetchAllSoldTickets(['ticket_number', 'sale_date', 'sale_channel', 'sale_amount', 'usage_status', 'row_status']);
     hint.textContent = `保存済み ${soldAllSavedRows.length.toLocaleString()} 件を読み込みました。`;
     const months = Array.from(new Set(soldAllSavedRows.map(r => (r.sale_date || '').slice(0, 7)).filter(Boolean))).sort().reverse();
     const sel = document.getElementById('sold-filter-month');
@@ -2212,7 +2319,7 @@ function renderSoldView() {
   const body = document.getElementById('sold-store-view-body');
   if (soldAllSavedRows.length === 0) { body.innerHTML = '<div class="empty-state">まだ販売データが保存されていません。上の「1」からExcelを読み込んでください。</div>'; return; }
   const month = document.getElementById('sold-filter-month').value;
-  const rows = soldAllSavedRows.filter(r => !month || (r.sale_date || '').startsWith(month));
+  const rows = soldAllSavedRows.filter(r => r.row_status !== 'ミス' && (!month || (r.sale_date || '').startsWith(month)));
   const by = new Map();
   rows.forEach(r => {
     const k = r.sale_channel || '(不明)';
@@ -2240,7 +2347,7 @@ async function loadSoldForTickets(rows) {
   for (let i = 0; i < nums.length; i += 150) {
     const chunk = nums.slice(i, i + 150);
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/sold_tickets?select=ticket_number,sale_date,sale_channel,sale_amount,usage_status&ticket_number=in.(${chunk.join(',')})`, { headers: sbHeaders() });
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/sold_tickets?select=ticket_number,sale_date,sale_channel,sale_amount,usage_status,row_status&ticket_number=in.(${chunk.join(',')})`, { headers: sbHeaders() });
       if (res.ok) (await res.json()).forEach(x => m.set(x.ticket_number, x));
     } catch (e) { /* 販売情報が取れなくても照合結果の表示は続ける */ }
   }
@@ -2251,6 +2358,7 @@ function soldCell(r) {
   if (soldMap.size === 0) return '<span style="color:var(--text3)">—</span>';
   const s = soldMap.get(r.ticket_number);
   if (!s) return '<span style="color:var(--warn,#d9822b)" title="販売データに、この券番号がありません">⚠ 記録なし</span>';
+  if (s.row_status === 'ミス') return '<span style="color:var(--danger,#d94f4f)" title="店舗の台帳で「ミス」とされた券です">⚠ ミス券</span>';
   const d = s.sale_date ? s.sale_date.slice(5).replace('-', '/') : '日付不明';
   const amtNg = s.sale_amount != null && r.face_value && s.sale_amount !== r.face_value;
   return `<span title="販売日 ${s.sale_date || '不明'} / ${s.sale_channel || ''} / ¥${(s.sale_amount || 0).toLocaleString()}">${d} ${s.sale_channel || ''}${amtNg ? ' <span style="color:var(--warn,#d9822b)">⚠額</span>' : ''}</span>`;
