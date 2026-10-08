@@ -563,6 +563,7 @@
         <button class="tab" data-filter="要確認" onclick="setFilter('要確認',this)">⚠️ 要確認</button>
         <button class="tab" data-filter="期限切れ使用" onclick="setFilter('期限切れ使用',this)">⏰ 期限切れ使用</button>
         <button class="tab" data-filter="読取不能" onclick="setFilter('読取不能',this)">読取不能</button>
+        <button class="tab" data-filter="ミスチケット" onclick="setFilter('ミスチケット',this)">🚫 ミスチケット</button>
         <button class="tab archive-tab" data-filter="archived" onclick="setFilter('archived',this)">🗑 アーカイブ</button>
       </div>
       <div class="filter-right">
@@ -1012,15 +1013,16 @@ async function loadData() {
 
 function updateStats() {
   const activeData = allData.filter(r => !r.archived && inCurrentMonth(r));
-  const counts = {ok:0, warn:0, expired:0, unread:0};
+  const counts = {ok:0, warn:0, expired:0, unread:0, miss:0};
   activeData.forEach(r => {
     const j = r.judgment || '';
     if (j === '正規の券' || j === 'OK') counts.ok++;
     else if (j === '期限切れ使用') counts.expired++;
     else if (j === '読取不能') counts.unread++;
+    else if (j === 'ミスチケット') counts.miss++;
     else if (j.includes('確認')) counts.warn++;
   });
-  document.getElementById('stat-total').textContent = activeData.length;
+  document.getElementById('stat-total').textContent = activeData.length - counts.miss; // ミスチケットは照合の対象外
   document.getElementById('stat-ok').textContent = counts.ok;
   document.getElementById('stat-warn').textContent = counts.warn;
   document.getElementById('stat-expired').textContent = counts.expired;
@@ -1037,6 +1039,7 @@ function setFilter(filter, btn) {
 function getBadgeClass(judgment) {
   if (!judgment) return 'badge-gray';
   if (judgment === '正規の券' || judgment === 'OK') return 'badge-ok';
+  if (judgment === 'ミスチケット') return 'badge-gray';
   if (judgment === '期限切れ使用' || judgment === '読取不能') return 'badge-danger';
   if (judgment.includes('確認')) return 'badge-warn';
   return 'badge-info';
@@ -1188,6 +1191,7 @@ function showDetail(ticketNumber) {
         <option value="要確認" ${r.judgment==='要確認'?'selected':''}>要確認</option>
         <option value="期限切れ使用" ${r.judgment==='期限切れ使用'?'selected':''}>期限切れ使用</option>
         <option value="読取不能" ${r.judgment==='読取不能'?'selected':''}>読取不能</option>
+        <option value="ミスチケット" ${r.judgment==='ミスチケット'?'selected':''}>ミスチケット</option>
       </select>
     </div>
     <div class="detail-item"><label>対応状況</label><span>${r.status||'—'}</span></div>
