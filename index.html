@@ -568,10 +568,11 @@
       </div>
       <div class="filter-right">
         <select class="search-input" id="month-filter" style="width:130px;font-weight:600" onchange="setMonth(this.value)" title="対象月(利用日ベース)"></select>
-        <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable()">
-        <input type="date" class="search-input" id="date-from" style="width:140px" onchange="renderTable()">
+        <select class="search-input" id="read-month-filter" style="width:150px" onchange="setReadMonth(this.value)" title="読み込み月(写真を読み取った月)"></select>
+        <input type="text" class="search-input" id="search-input" placeholder="店舗名・券番号・お客様名で検索" oninput="renderTable();updateStats()">
+        <input type="date" class="search-input" id="date-from" style="width:140px" onchange="renderTable();updateStats()">
         <span style="color:var(--text3);font-size:0.8rem">〜</span>
-        <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable()">
+        <input type="date" class="search-input" id="date-to" style="width:140px" onchange="renderTable();updateStats()">
         <button class="btn-reload" onclick="loadData()">↻</button>
         <button class="btn-reload" id="rematch-btn" onclick="rematchAllPending()">🔁 POSデータで再照合</button>
         <button class="btn-excel" onclick="exportExcel()">📊 Excel出力</button>
@@ -964,8 +965,44 @@ function monthLabel(m) {
   if (m === 'none') return '日付なし';
   return `${m.slice(0, 4)}年${parseInt(m.slice(5, 7), 10)}月`;
 }
+// 読み込み月(写真を読み取った月)。日本時間のYYYY-MM。記録がなければ 'none'
+let readMonth = ''; // '' = すべて
+function rowReadMonth(r) {
+  if (!r.read_at) return 'none';
+  const d = new Date(r.read_at);
+  if (isNaN(d.getTime())) return 'none';
+  const j = new Date(d.getTime() + 9 * 3600 * 1000);
+  return `${j.getUTCFullYear()}-${String(j.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+function readMonthLabel(m) {
+  if (m === '') return '読込月:すべて';
+  if (m === 'none') return '読込月:不明';
+  return `読込 ${m.slice(0, 4)}年${parseInt(m.slice(5, 7), 10)}月`;
+}
 function inCurrentMonth(r) {
-  return currentMonth === '' || rowMonth(r) === currentMonth;
+  if (readMonth !== '' && rowReadMonth(r) !== readMonth) return false;
+  if (currentMonth === '') return true;
+  const m = rowMonth(r);
+  // 利用日が空欄の券は、どの月を見ていても必ず表示する(見落とし防止)
+  return m === currentMonth || (m === 'none' && currentMonth !== 'none');
+}
+function setReadMonth(m) {
+  readMonth = m;
+  buildMonthOptions(false);
+  updateStats();
+  renderTable();
+}
+function buildReadMonthOptions() {
+  const months = [...new Set(allData.map(rowReadMonth))].filter(m => m !== 'none').sort().reverse();
+  const hasNone = allData.some(r => rowReadMonth(r) === 'none');
+  const opts = [''].concat(months).concat(hasNone ? ['none'] : []);
+  if (readMonth && !opts.includes(readMonth)) readMonth = '';
+  const sel = document.getElementById('read-month-filter');
+  if (!sel) return;
+  sel.innerHTML = opts.map(m => {
+    const n = m === '' ? allData.filter(r => !r.archived).length : allData.filter(r => !r.archived && rowReadMonth(r) === m).length;
+    return `<option value="${m}" ${m === readMonth ? 'selected' : ''}>${readMonthLabel(m)}(${n})</option>`;
+  }).join('');
 }
 function setMonth(m) {
   currentMonth = m;
@@ -985,7 +1022,8 @@ function buildMonthOptions(initial) {
   const opts = [''].concat(months).concat(hasNone ? ['none'] : []);
   if (currentMonth && !opts.includes(currentMonth)) currentMonth = '';
   sel.innerHTML = opts.map(m => {
-    const n = m === '' ? allData.filter(r => !r.archived).length : allData.filter(r => !r.archived && rowMonth(r) === m).length;
+    const base = allData.filter(r => !r.archived && (readMonth === '' || rowReadMonth(r) === readMonth));
+    const n = m === '' ? base.length : base.filter(r => rowMonth(r) === m || (m !== 'none' && rowMonth(r) === 'none')).length;
     return `<option value="${m}" ${m === currentMonth ? 'selected' : ''}>${monthLabel(m)}(${n})</option>`;
   }).join('');
 }
@@ -1000,6 +1038,7 @@ async function loadData() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allData = await res.json();
     buildMonthOptions(!document.getElementById('month-filter').options.length);
+    buildReadMonthOptions();
     updateStats();
     renderTable();
     loadSoldForTickets(allData);
@@ -1011,8 +1050,27 @@ async function loadData() {
   }
 }
 
+// 上の数字(統計)用: 月・検索欄・期間の絞り込みに連動させる(判定タブは対象外)
+function matchesBaseFilters(r) {
+  if (!inCurrentMonth(r)) return false;
+  const searchEl = document.getElementById('search-input');
+  const fromEl = document.getElementById('date-from');
+  const toEl = document.getElementById('date-to');
+  const search = searchEl ? searchEl.value.toLowerCase() : '';
+  const dateFrom = fromEl ? fromEl.value : '';
+  const dateTo = toEl ? toEl.value : '';
+  if (search) {
+    const t = `${r.ticket_number||''} ${r.store_name||''} ${r.judgment||''} ${r.customer_name||''}`.toLowerCase();
+    if (!t.includes(search)) return false;
+  }
+  const usedDate = r.used_date_confirmed || r.used_date || '';
+  if (dateFrom && usedDate && usedDate < dateFrom) return false;
+  if (dateTo && usedDate && usedDate > dateTo) return false;
+  return true;
+}
+
 function updateStats() {
-  const activeData = allData.filter(r => !r.archived && inCurrentMonth(r));
+  const activeData = allData.filter(r => !r.archived && matchesBaseFilters(r));
   const counts = {ok:0, warn:0, expired:0, unread:0, miss:0};
   activeData.forEach(r => {
     const j = r.judgment || '';
@@ -1104,7 +1162,7 @@ function renderTable() {
         ${filtered.map(r => `
           <tr>
             <td><span class="badge ${getBadgeClass(r.judgment)}">${r.judgment || '—'}</span></td>
-            <td class="mono">${r.ticket_number || '—'}</td>
+            <td class="mono">${r.ticket_number || '—'}<div style="color:var(--text3);font-size:0.68em;font-weight:400">読込 ${rowReadMonth(r) === 'none' ? '不明' : rowReadMonth(r)}</div></td>
             <td><span style="color:var(--text2)">${r.course_type || '—'}</span></td>
             <td>${r.store_name || '—'}</td>
             <td>${soldCell(r)}</td>
