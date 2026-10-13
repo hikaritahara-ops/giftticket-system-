@@ -1696,7 +1696,41 @@ document.getElementById('pos-upsert-btn').addEventListener('click', async () => 
   }
   progressText.textContent = `完了しました(成功: ${done}件 / 失敗: ${errCount}件)`;
   upsertBtn.textContent = '完了しました';
+  // 取り込みが成功したら、要確認の券を自動で再照合する(ボタンを押す手間をなくす)
+  if (done > 0) {
+    try { await autoRematchAfterPosImport(progressText, logBox); }
+    catch (e) { logBox.innerHTML += `<div class="err-line">✗ 自動再照合でエラー: ${e.message}(照合結果ページの「POSデータで再照合」ボタンで再実行できます)</div>`; }
+  }
 });
+
+// POS取り込み直後の自動再照合。照合結果を読み直してから、要確認の券だけを再照合する
+async function autoRematchAfterPosImport(progressText, logBox) {
+  progressText.textContent = '取り込み完了。要確認の券を自動で再照合します...';
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=*&order=used_date.desc&limit=1000`, {
+    headers: sbHeaders({ 'Content-Type': 'application/json' })
+  });
+  if (!res.ok) throw new Error(`照合結果の読み込みに失敗 (HTTP ${res.status})`);
+  const rows = await res.json();
+  const targets = rows.filter(r => !r.archived && r.judgment === '要確認');
+  if (targets.length === 0) {
+    logBox.innerHTML += `<div class="ok-line">✓ 自動再照合: 要確認の券はありません</div>`;
+    progressText.textContent = '取り込み完了(再照合の対象なし)';
+    return;
+  }
+  let success = 0, changed = 0;
+  for (let i = 0; i < targets.length; i++) {
+    progressText.textContent = `自動再照合中... (${i + 1}/${targets.length})`;
+    try {
+      const before = targets[i].judgment;
+      const result = await rematchTicket(targets[i]);
+      if (result.ok) { success++; if (result.judgment !== before) changed++; }
+    } catch (e) { /* この券はスキップして続行 */ }
+  }
+  logBox.innerHTML += `<div class="ok-line">✓ 自動再照合: ${targets.length}件中${success}件を処理(判定が変わったのは${changed}件)</div>`;
+  progressText.textContent = `取り込み完了 + 自動再照合完了(判定が変わったのは${changed}件)`;
+  logBox.scrollTop = logBox.scrollHeight;
+  loadData(); // 照合結果ページの表示も最新にする
+}
 
 document.getElementById('pos-reset-btn').addEventListener('click', () => {
   posParsedRows = []; posExistingKeys = new Set();
