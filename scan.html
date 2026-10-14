@@ -366,45 +366,78 @@ async function loadRecent() {
   }));
 }
 
-/* ---------- 撮影して読み取る(スマホの中だけで処理。写真は外部に送りません) ---------- */
+/* ---------- 撮影して読み取る(端末の中だけで処理。写真は外部に送りません) ----------
+   1回の読み取りは不安定なので、大きさを変えて何度か読み、
+   発券データに存在する番号を優先して決める。 */
+let ocrWorker = null;
+async function getWorker() {
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker('eng');
+    await ocrWorker.setParameters({ tessedit_pageseg_mode: '11' });
+  }
+  return ocrWorker;
+}
 $('btn-cam').addEventListener('click', () => $('cam-file').click());
 $('cam-file').addEventListener('change', async () => {
   const f = $('cam-file').files[0];
   $('cam-file').value = '';
   if (!f) return;
   const area = $('ocr-area');
+  setTicket('', '手入力');
   showMsg(area, 'ok', '読み取り中...(初回は少し時間がかかります)');
   try {
-    const canvas = await toCanvas(f, 1600);
-    const { data } = await Tesseract.recognize(canvas, 'eng', {
-      tessedit_char_whitelist: 'ABCP0123456789OIlSB ',
-      tessedit_pageseg_mode: '11'
-    });
-    const cands = extractCandidates(data.text || '');
-    if (!cands.length) {
-      setTicket('', '手入力');
-      showMsg(area, 'warn', '番号が読み取れませんでした。券番号の部分を大きく写して、もう一度撮ってください。(それでも読めないときは、下の「手で入力する」を使えます)');
+    const worker = await getWorker();
+    const votes = new Map();                       // 番号 → 何回読めたか
+    const sizes = [1600, 2400, 800];               // 大きさを変えて読む
+    let valid = [];                                // 発券データにある番号
+    for (let k = 0; k < sizes.length; k++) {
+      showMsg(area, 'ok', `読み取り中...(${k + 1}/${sizes.length})`);
+      const canvas = await toCanvas(f, sizes[k]);
+      const { data } = await worker.recognize(canvas);
+      extractCandidates(data.text || '').forEach(c => votes.set(c, (votes.get(c) || 0) + 1));
+      if (votes.size) {
+        valid = await filterIssued([...votes.keys()]);
+        // 発券データにある番号が、1つだけ見つかって、2回以上読めていれば、そこで終了
+        if (valid.length === 1 && votes.get(valid[0]) >= 2) break;
+      }
+    }
+    const all = [...votes.keys()];
+    if (!all.length) {
+      showMsg(area, 'warn', '番号が読み取れませんでした。券番号の部分を、少し大きく、まっすぐ写して、もう一度撮ってください。(それでも読めないときは、下の「手で入力する」を使えます)');
       return;
     }
-    if (cands.length === 1) {
-      setTicket(cands[0], '撮影読取');
+    // 候補を並べる:発券データにある番号 → 読めた回数の多い順
+    const ranked = all.sort((a, b) => (valid.includes(b) - valid.includes(a)) || (votes.get(b) - votes.get(a)));
+    if (valid.length === 1) {
+      setTicket(valid[0], '撮影読取');
       showMsg(area, 'ok', '読み取りました。大きく表示された番号を、券の番号と見比べてください。違うときは、もう一度撮影してください。');
       return;
     }
-    // 候補が複数あるときは、選んでもらう
-    const box = el('div', {}, [el('div', { className: 'msg warn', textContent: '番号の候補が複数あります。券の番号と合っているものを、タップしてください。' })]);
+    if (valid.length === 0 && ranked.length === 1) {
+      setTicket(ranked[0], '撮影読取');
+      showMsg(area, 'warn', '読み取りました(発券データには、見つかっていません)。券の番号と、よく見比べてください。');
+      return;
+    }
+    const box = el('div', {}, [el('div', { className: 'msg warn', textContent: '番号の候補が複数あります。券の番号と合っているものを、タップしてください。(✓は、発券データにある番号です)' })]);
     const chips = el('div', { className: 'chips' });
-    cands.forEach(c => {
-      const chip = el('span', { className: 'chip', textContent: c });
+    ranked.slice(0, 5).forEach(c => {
+      const chip = el('span', { className: 'chip', textContent: (valid.includes(c) ? '✓ ' : '') + c });
       chip.addEventListener('click', () => { area.replaceChildren(); setTicket(c, '撮影読取'); });
       chips.append(chip);
     });
     box.append(chips);
     area.replaceChildren(box);
   } catch (e) {
-    showMsg(area, 'ng', '読み取りに失敗しました。もう一度撮影するか、下の「手で入力する」を使ってください。');
+    showMsg(area, 'ng', '読み取りに失敗しました。通信を確認して、もう一度撮影するか、下の「手で入力する」を使ってください。');
   }
 });
+// 候補のうち、発券データに存在するものだけを返す
+async function filterIssued(cands) {
+  try {
+    const { data } = await sb.from('issued_tickets').select('ticket_number').in('ticket_number', cands);
+    return (data || []).map(r => r.ticket_number);
+  } catch (e) { return []; }
+}
 function toCanvas(file, maxSide) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -414,31 +447,26 @@ function toCanvas(file, maxSide) {
       const c = document.createElement('canvas');
       c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
       const g = c.getContext('2d');
-      g.drawImage(img, 0, 0, c.width, c.height);
-      // 白黒に近づけて、文字を読みやすくする
-      const d = g.getImageData(0, 0, c.width, c.height), p = d.data;
-      for (let i = 0; i < p.length; i += 4) {
-        const y = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
-        const v = y > 150 ? 255 : (y < 90 ? 0 : y);
-        p[i] = p[i + 1] = p[i + 2] = v;
-      }
-      g.putImageData(d, 0, 0);
+      g.drawImage(img, 0, 0, c.width, c.height);   // 白黒化などの加工はしない(かえって読めなくなるため)
       URL.revokeObjectURL(url); resolve(c);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('img')); };
     img.src = url;
   });
 }
-// 読み取った文字から、「英字1文字 + 数字7桁」の形を探す(数字部分の読み間違いを補正)
+// 読み取った文字から、「英字1文字(A/B/C/P)+ 数字7桁」の形を探す
 function extractCandidates(text) {
   const out = new Set();
-  const re = /([ABCP])[\s\-]?([0-9OIlSB][0-9OIlSB\s]{6,9})/g;
+  const t = (text || '').toUpperCase();
+  const re = /([ABCP])[\s\-]?([0-9OIlSB]{7})/g;
   let m;
-  while ((m = re.exec(text.toUpperCase().replace(/L/g, 'l'))) !== null) {
-    const digits = m[2].replace(/\s/g, '').replace(/O/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
-    if (digits.length >= 7) out.add(m[1] + digits.slice(0, 7));
+  while ((m = re.exec(t)) !== null) {
+    const after = t.charAt(re.lastIndex);
+    if (/[0-9]/.test(after)) continue;               // 8桁以上の数字の一部は除く
+    const digits = m[2].replace(/O/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
+    if (/^[0-9]{7}$/.test(digits)) out.add(m[1] + digits);
   }
-  return [...out].slice(0, 4);
+  return [...out];
 }
 
 init();
