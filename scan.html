@@ -149,9 +149,9 @@ const STORES = [
   'PENTHOUSE 西麻布','PANTHEON白金台プラチナム','PANTHEON赤坂','PANTHEON西麻布','PANTHEON西梅田',
   'PANTHEON西中洲','PANTHEON新宿','PANTHEON心斎橋','PANTHEON銀座並木通り','PANTHEON京都祇園'
 ];
-const PRICE = { A:15840, B:26400, C:31680, P:90000 };
-const COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)' };
-const TICKET_RE = /^[ABCP][0-9]{7}$/;
+const PRICE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
+const COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
+const TICKET_RE = /^[ABCPN][0-9]{7}$/;
 
 const $ = id => document.getElementById(id);
 let session = null;
@@ -401,6 +401,11 @@ $('cam-file').addEventListener('change', async () => {
         if (valid.length === 1 && votes.get(valid[0]) >= 2) break;
       }
     }
+    // 券全体を遠くから撮ったときなど、番号が小さくて読めない場合:写真を小さく区切って、1か所ずつ大きくして読む
+    if (valid.length === 0) {
+      const tv = await tilePass(f, worker, area);
+      tv.forEach(c => { votes.set(c, (votes.get(c) || 0) + 1); if (!valid.includes(c)) valid.push(c); });
+    }
     const all = [...votes.keys()];
     if (!all.length) {
       showMsg(area, 'warn', '番号が読み取れませんでした。券番号の部分を、少し大きく、まっすぐ写して、もう一度撮ってください。(それでも読めないときは、下の「手で入力する」を使えます)');
@@ -431,6 +436,42 @@ $('cam-file').addEventListener('change', async () => {
     showMsg(area, 'ng', '読み取りに失敗しました。通信を確認して、もう一度撮影するか、下の「手で入力する」を使ってください。');
   }
 });
+// 写真を区切って(横40%×縦30%、半分ずつずらす)大きくして読む。真ん中から順に読み、発券データにある番号が見つかった時点で終了
+async function tilePass(file, worker, area) {
+  const big = await toCanvas(file, 3000);
+  const W = big.width, H = big.height, tw = 0.4, th = 0.3;
+  const tiles = [];
+  for (let x = 0; x + tw <= 1.0001; x += tw / 2) for (let y = 0; y + th <= 1.0001; y += th / 2) tiles.push([x, y]);
+  tiles.sort((a, b) => (Math.abs(a[0] + tw / 2 - 0.5) + Math.abs(a[1] + th / 2 - 0.5)) - (Math.abs(b[0] + tw / 2 - 0.5) + Math.abs(b[1] + th / 2 - 0.5)));
+  await worker.setParameters({ tessedit_pageseg_mode: '6' });
+  try {
+    for (let i = 0; i < tiles.length; i++) {
+      showMsg(area, 'ok', `番号の場所を探しています...(${i + 1}/${tiles.length})`);
+      const [x, y] = tiles[i];
+      const sw = Math.round(W * tw), sh = Math.round(H * th);
+      const c = document.createElement('canvas');
+      c.width = 1200; c.height = Math.round(sh * 1200 / sw);
+      c.getContext('2d').drawImage(big, Math.round(W * x), Math.round(H * y), sw, sh, 0, 0, c.width, c.height);
+      const { data } = await worker.recognize(c);
+      const t = (data.text || '').toUpperCase();
+      const nums = new Set();
+      let m; const re = /(?<![0-9])([0-9OIlSB]{7})(?![0-9])/g;   // 頭の英字が読めなくても、数字7桁を拾う
+      while ((m = re.exec(t)) !== null) {
+        const d = m[1].replace(/O/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
+        if (/^[0-9]{7}$/.test(d)) nums.add(d);
+      }
+      const variants = [];
+      nums.forEach(d => ['A', 'B', 'C', 'P', 'N'].forEach(l => variants.push(l + d)));
+      if (variants.length) {
+        const ok = await filterIssued(variants);     // 発券データにある番号だけ採用
+        if (ok.length) return ok;
+      }
+    }
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '11' });
+  }
+  return [];
+}
 // 候補のうち、発券データに存在するものだけを返す
 async function filterIssued(cands) {
   try {
@@ -458,7 +499,7 @@ function toCanvas(file, maxSide) {
 function extractCandidates(text) {
   const out = new Set();
   const t = (text || '').toUpperCase();
-  const re = /([ABCP])[\s\-]?([0-9OIlSB]{7})/g;
+  const re = /([ABCPN])[\s\-]?([0-9OIlSB]{7})/g;
   let m;
   while ((m = re.exec(t)) !== null) {
     const after = t.charAt(re.lastIndex);
