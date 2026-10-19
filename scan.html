@@ -113,6 +113,8 @@
       <button class="cam-main" id="btn-cam" type="button">📷 券番号を撮影する</button>
       <div class="tip">券の左下の番号を、できるだけ大きく写してください。</div>
       <input id="cam-file" type="file" accept="image/*" capture="environment" class="hidden">
+      <button id="btn-pick" type="button" style="margin-top:8px;background:transparent;border:1px solid var(--line, #3a4a5e);color:inherit;padding:10px 14px;border-radius:10px;font-size:15px;width:100%">🖼 保存した写真から選ぶ</button>
+      <input id="pick-file" type="file" accept="image/*" class="hidden">
       <div class="big mono" id="big-no">— — — — — — — —</div>
       <div id="ocr-area"></div>
       <div id="check-area"></div>
@@ -378,9 +380,11 @@ async function getWorker() {
   return ocrWorker;
 }
 $('btn-cam').addEventListener('click', () => $('cam-file').click());
-$('cam-file').addEventListener('change', async () => {
-  const f = $('cam-file').files[0];
-  $('cam-file').value = '';
+$('btn-pick').addEventListener('click', () => $('pick-file').click());
+const onPhoto = async (ev) => {
+  const inp = ev.target;
+  const f = inp.files[0];
+  inp.value = '';
   if (!f) return;
   const area = $('ocr-area');
   setTicket('', '手入力');
@@ -435,7 +439,9 @@ $('cam-file').addEventListener('change', async () => {
   } catch (e) {
     showMsg(area, 'ng', '読み取りに失敗しました。通信を確認して、もう一度撮影するか、下の「手で入力する」を使ってください。');
   }
-});
+};
+$('cam-file').addEventListener('change', onPhoto);
+$('pick-file').addEventListener('change', onPhoto);
 // 写真を区切って(横40%×縦30%、半分ずつずらす)大きくして読む。真ん中から順に読み、発券データにある番号が見つかった時点で終了
 async function tilePass(file, worker, area) {
   const big = await toCanvas(file, 3000);
