@@ -171,6 +171,8 @@
     </div>
 
     <div class="card">
+      <div class="top"><b style="font-size:.95rem">この店舗の、日付ごとの合計</b></div>
+      <div id="day-totals" style="margin:8px 0 14px"></div>
       <div class="top"><b style="font-size:.95rem">この店舗の最近の記録</b></div>
       <ul class="list" id="recent"></ul>
     </div>
@@ -254,7 +256,7 @@ function setupApp() {
   $('used-date').value = todayJST();
   $('used-date').max = todayJST();
   $('store').addEventListener('change', () => { safeSet('scan_store', $('store').value); loadRecent(); updateButton(); });
-  $('used-date').addEventListener('change', () => { checked = null; runCheck(); });
+  $('used-date').addEventListener('change', () => { checked = null; runCheck(); loadDayTotals(); });
   $('ticket').addEventListener('input', () => {
     const v = normalizeTicket($('ticket').value);
     if ($('ticket').value !== v) $('ticket').value = v;
@@ -443,7 +445,33 @@ $('n-course').addEventListener('change', () => { $('confirm-box').replaceChildre
 $('staff-disc').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateExpect(); });
 
 /* 最近の記録 */
+// 日付ごとの合計(この店舗・直近14日分の利用日)。お会計の合計と見比べるため
+async function loadDayTotals() {
+  const box = $('day-totals');
+  if (!box) return;
+  const from = new Date(Date.now() + 9 * 3600 * 1000 - 14 * 86400000).toISOString().slice(0, 10);
+  const { data, error } = await sb.from('usage_log').select('used_date,expected_amount')
+    .eq('store_name', $('store').value).gte('used_date', from).order('used_date', { ascending: false }).limit(1000);
+  if (error) { box.replaceChildren(); return; }
+  if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '直近14日の記録は、まだありません。' })); return; }
+  const g = new Map();
+  data.forEach(r => {
+    const d = String(r.used_date).slice(0, 10);
+    if (!g.has(d)) g.set(d, { n: 0, sum: 0, none: 0 });
+    const e = g.get(d); e.n++;
+    if (r.expected_amount != null) e.sum += Number(r.expected_amount); else e.none++;
+  });
+  const sel = $('used-date').value;
+  box.replaceChildren(...[...g.entries()].map(([d, e]) => {
+    const on = d === sel;
+    return el('div', { style: `display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;${on ? 'background:rgba(59,130,246,.18);' : ''}border-bottom:1px solid var(--line)` }, [
+      el('span', { textContent: d + (on ? '(選択中)' : '') }),
+      el('span', { style: 'font-weight:700', textContent: `${e.n}枚 / ¥${e.sum.toLocaleString()}` + (e.none ? `(金額なし ${e.none}枚)` : '') })
+    ]);
+  }));
+}
 async function loadRecent() {
+  loadDayTotals();
   const ul = $('recent');
   const { data, error } = await sb.from('usage_log')
     .select('id,ticket_number,used_date,created_at,created_by')
