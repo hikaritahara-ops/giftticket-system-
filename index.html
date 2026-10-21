@@ -752,18 +752,11 @@
   <div class="page" id="page-store">
     <div class="card">
       <h2><div class="left">店舗の記録(iPadで、店舗が記録した券)</div></h2>
-      <div class="hint">店舗が iPad の記録画面で記録した券の一覧です。写真の読み取り結果(照合結果)に、同じ券番号があるかを、並べて確認できます。</div>
+      <div class="hint">店舗が記録画面で記録した券の一覧です。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。</div>
       <div id="store-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">店舗</label><select id="store-filter-store" onchange="renderStoreView()"><option value="">すべて</option></select></div>
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">利用月</label><select id="store-filter-month" onchange="renderStoreView()"><option value="">すべて</option></select></div>
-        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">写真との突合</label>
-          <select id="store-filter-match" onchange="renderStoreView()">
-            <option value="">すべて</option>
-            <option value="match">写真と一致</option>
-            <option value="nophoto">写真なし(店舗の記録のみ)</option>
-            <option value="diff">写真と食い違い</option>
-          </select></div>
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">お会計データとの突合</label>
           <select id="store-filter-pos" onchange="renderStoreView()">
             <option value="">すべて</option>
@@ -990,15 +983,7 @@ async function loadStoreView() {
     const r1 = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?select=*&order=created_at.desc&limit=1000`, { headers: sbHeaders() });
     if (!r1.ok) throw new Error('usage_log HTTP ' + r1.status);
     const logs = await r1.json();
-    const nums = [...new Set(logs.map(l => l.ticket_number).filter(Boolean))];
-    const photo = {};
-    for (let i = 0; i < nums.length; i += 100) {
-      const chunk = nums.slice(i, i + 100);
-      const q = chunk.map(n => '"' + n + '"').join(',');
-      const r2 = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=ticket_number,judgment,judgment_reason,store_name,used_date,used_date_confirmed&ticket_number=in.(${encodeURIComponent(q)})`, { headers: sbHeaders() });
-      if (r2.ok) (await r2.json()).forEach(x => { photo[x.ticket_number] = x; });
-    }
-    storeRows = logs.map(l => ({ log: l, photo: photo[l.ticket_number] || null, pos: 'nodata' }));
+    storeRows = logs.map(l => ({ log: l, photo: null, pos: 'nodata' }));
     await matchStoreWithPos(logs);
     storeViewLoaded = true;
     // 店舗の選択肢
@@ -1072,29 +1057,19 @@ async function matchStoreWithPos(logs) {
   pool.forEach(arr => arr.forEach(p => { if (STORE_TICKET_AMOUNTS.has(Number(p.sales_amount))) storePosLeft.push(p); }));
   storePosLeft.sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)));
 }
-function storeMatchState(row) {
-  const p = row.photo, l = row.log;
-  if (!p) return 'nophoto';
-  const pd = p.used_date_confirmed || p.used_date || '';
-  const dateDiff = pd && l.used_date && String(pd).slice(0, 10) !== String(l.used_date).slice(0, 10);
-  const storeDiff = p.store_name && l.store_name && p.store_name !== l.store_name;
-  return (dateDiff || storeDiff) ? 'diff' : 'match';
-}
 function storeFilteredRows() {
   const fs = document.getElementById('store-filter-store').value;
-  const fm = document.getElementById('store-filter-match').value;
   const fmo = document.getElementById('store-filter-month').value;
   const fp = document.getElementById('store-filter-pos').value;
-  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fm || storeMatchState(r) === fm) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
+  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
 }
 const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
 const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
 function exportStoreExcel() {
   const rows = storeFilteredRows();
   if (!rows.length) { showToast('出力する記録がありません', 'error'); return; }
-  const stateText = { match: '写真と一致', nophoto: '写真なし', diff: '食い違い' };
   const toObj = (r) => {
-    const l = r.log, p = r.photo, h = (l.ticket_number || '')[0];
+    const l = r.log, h = (l.ticket_number || '')[0];
     return {
       '利用日': l.used_date ? String(l.used_date).slice(0, 10) : '',
       '店舗': l.store_name || '',
@@ -1106,10 +1081,7 @@ function exportStoreExcel() {
       '入力方法': l.input_method || '',
       '記録日時': l.created_at ? new Date(l.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
       '記録者': l.created_by || '',
-      '突合': stateText[storeMatchState(r)] || '',
       'お会計との突合': ({ ok: '一致', none: 'お会計なし', nodata: '未取込' })[r.pos] || '',
-      '写真の利用日': p ? String(p.used_date_confirmed || p.used_date || '').slice(0, 10) : '',
-      '写真の判定': p ? (p.judgment || '') : '',
       '備考': l.note || ''
     };
   };
@@ -1185,15 +1157,9 @@ function renderStorePosOnly() {
 }
 function renderStoreView() {
   const fs = document.getElementById('store-filter-store').value;
-  const fm = document.getElementById('store-filter-match').value;
   const all = storeRows;
-  const cnt = { match: 0, nophoto: 0, diff: 0 };
-  all.forEach(r => cnt[storeMatchState(r)]++);
   document.getElementById('store-summary').innerHTML =
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">店舗の記録</div><div style="font-size:1.4rem;font-weight:700">${all.length}件</div></div>` +
-    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${cnt.match}件</div></div>` +
-    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真なし</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${cnt.nophoto}件</div></div>` +
-    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">食い違い</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${cnt.diff}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${all.filter(r => r.pos === 'ok').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計なし(要確認)</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${all.filter(r => r.pos === 'none').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計データ未取込</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${all.filter(r => r.pos === 'nodata').length}件</div></div>`;
@@ -1202,17 +1168,88 @@ function renderStoreView() {
   const rows = storeFilteredRows();
   const body = document.getElementById('store-view-body');
   if (!rows.length) { body.innerHTML = '<div class="hint">該当する記録がありません。</div>'; return; }
-  const badge = (st) => st === 'match' ? '<span class="badge badge-ok">写真と一致</span>'
-    : st === 'diff' ? '<span class="badge badge-danger">食い違い</span>'
-    : '<span class="badge badge-warn">写真なし</span>';
   const posBadge = (v) => v === 'ok' ? '<span class="badge badge-ok">一致</span>' : v === 'none' ? '<span class="badge badge-danger">お会計なし</span>' : '<span class="badge badge-warn">未取込</span>';
   const fmt = (d) => d ? String(d).slice(0, 10) : '-';
   const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>お会計</th><th>写真の利用日</th><th>写真の判定</th><th>券の写真</th></tr></thead><tbody>' +
+  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>お会計</th><th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
     rows.map(r => {
-      const l = r.log, p = r.photo, st = storeMatchState(r);
-      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${posBadge(r.pos)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td></tr>`;
+      const l = r.log;
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
     }).join('') + '</tbody></table></div>';
+}
+// ---- 記録の修正・削除は、管理部のアカウントだけ(データベース側でも、同じ制限をかけています) ----
+function isStoreAdmin() {
+  const em = currentSession && currentSession.user && currentSession.user.email;
+  return !!em && /@omotesandocapital\.com$/i.test(em);
+}
+function openStoreModal(inner) {
+  const ov = document.createElement('div');
+  ov.id = 'store-modal';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = `<div style="background:var(--surface,#131c2e);color:var(--text,#e8edf7);border:1px solid var(--border,#26324a);border-radius:12px;padding:20px;max-width:420px;width:100%">${inner}</div>`;
+  document.body.appendChild(ov);
+  return ov;
+}
+function closeStoreModal() { const m = document.getElementById('store-modal'); if (m) m.remove(); }
+function openStoreEdit(id) {
+  const r = storeRows.find(x => Number(x.log.id) === Number(id));
+  if (!r) return;
+  const l = r.log;
+  const inp = 'width:100%;padding:8px;margin:4px 0 12px;border-radius:8px;border:1px solid var(--border,#26324a);background:transparent;color:inherit;font-size:1rem';
+  openStoreModal(`<h3 style="margin:0 0 12px;font-size:1rem">記録の修正:<span style="font-family:monospace">${escH(l.ticket_number)}</span>(${escH(l.store_name)})</h3>
+    <label style="font-size:.78rem;color:var(--text3)">利用日</label><input id="se-date" type="date" value="${escH(String(l.used_date || '').slice(0, 10))}" style="${inp}">
+    <label style="font-size:.78rem;color:var(--text3)">想定金額(円)</label><input id="se-amt" type="number" value="${l.expected_amount != null ? Number(l.expected_amount) : ''}" style="${inp}">
+    <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input id="se-staff" type="checkbox" ${l.staff_discount ? 'checked' : ''}> スタッフ割(20%引き)</label>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-small" onclick="closeStoreModal()">やめる</button><button class="btn-small" style="border-color:var(--accent);color:var(--accent)" onclick="saveStoreEdit(${Number(l.id)})">保存する</button></div>`);
+}
+async function saveStoreEdit(id) {
+  const r = storeRows.find(x => Number(x.log.id) === Number(id));
+  if (!r) return;
+  const l = r.log;
+  const date = document.getElementById('se-date').value;
+  const amtRaw = document.getElementById('se-amt').value;
+  const amt = amtRaw === '' ? null : Number(amtRaw);
+  const staff = document.getElementById('se-staff').checked;
+  if (!date) { showToast('利用日を入れてください', 'error'); return; }
+  const changes = [];
+  if (String(l.used_date || '').slice(0, 10) !== date) changes.push(`日付 ${String(l.used_date || '').slice(0, 10)}→${date}`);
+  if ((l.expected_amount == null ? null : Number(l.expected_amount)) !== amt) changes.push(`金額 ${l.expected_amount == null ? '-' : l.expected_amount}→${amt == null ? '-' : amt}`);
+  if (!!l.staff_discount !== staff) changes.push(`スタッフ割 ${l.staff_discount ? 'あり' : 'なし'}→${staff ? 'あり' : 'なし'}`);
+  if (!changes.length) { closeStoreModal(); return; }
+  const stamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const note = [l.note, `管理者修正(${currentSession.user.email} ${stamp}): ${changes.join(', ')}`].filter(Boolean).join(' / ');
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?id=eq.${Number(id)}`, {
+      method: 'PATCH', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }),
+      body: JSON.stringify({ used_date: date, expected_amount: amt, staff_discount: staff, note })
+    });
+    const out = res.ok ? await res.json() : [];
+    if (!res.ok || !out.length) throw new Error('権限がないか、保存できませんでした');
+    closeStoreModal(); showToast('修正しました'); storeViewLoaded = false; await loadStoreView();
+  } catch (e) { showToast('修正できませんでした: ' + e.message, 'error'); }
+}
+function openStoreDelete(id) {
+  const r = storeRows.find(x => Number(x.log.id) === Number(id));
+  if (!r) return;
+  const l = r.log;
+  openStoreModal(`<h3 style="margin:0 0 12px;font-size:1rem">この記録を削除しますか?</h3>
+    <div style="margin-bottom:12px;line-height:1.7"><span style="font-family:monospace">${escH(l.ticket_number)}</span>(${escH(l.store_name)}・利用日 ${escH(String(l.used_date || '').slice(0, 10))})<br><span style="color:var(--danger)">保存した券の写真も、一緒に削除されます。元に戻せません。</span></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-small" onclick="closeStoreModal()">やめる</button><button class="btn-small" style="border-color:var(--danger);color:var(--danger)" onclick="doStoreDelete(${Number(l.id)})">削除する</button></div>`);
+}
+async function doStoreDelete(id) {
+  const r = storeRows.find(x => Number(x.log.id) === Number(id));
+  if (!r) return;
+  const l = r.log;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?id=eq.${Number(id)}`, { method: 'DELETE', headers: sbHeaders({ 'Prefer': 'return=representation' }) });
+    const out = res.ok ? await res.json() : [];
+    if (!res.ok || !out.length) throw new Error('権限がないか、削除できませんでした');
+    if (l.photo_path) {
+      const pu = `${SUPABASE_URL}/storage/v1/object/ticket-photos/${String(l.photo_path).split('/').map(encodeURIComponent).join('/')}`;
+      try { await fetch(pu, { method: 'DELETE', headers: sbHeaders() }); } catch (e) {}
+    }
+    closeStoreModal(); showToast('削除しました'); storeViewLoaded = false; await loadStoreView();
+  } catch (e) { showToast('削除できませんでした: ' + e.message, 'error'); }
 }
 // 店舗で保存した券の写真を、ログインしている人だけが見られるように、取り出して表示する
 async function viewTicketPhoto(path) {
