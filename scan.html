@@ -94,8 +94,8 @@
     <h1>ギフチケ 利用記録</h1>
     <div class="sub">店舗用ログイン</div>
     <div class="card">
-      <label>メールアドレス</label>
-      <input id="email" type="email" autocomplete="username" inputmode="email">
+      <label>ID(管理部は、メールアドレス)</label>
+      <input id="email" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
       <label>パスワード</label>
       <input id="password" type="password" autocomplete="current-password">
       <div id="login-msg"></div>
@@ -110,6 +110,7 @@
       <button class="link" id="btn-logout">ログアウト</button>
     </div>
     <div class="sub">券を使ったら、券番号を入力して「記録する」を押してください。</div>
+    <div class="sub" id="whoami" style="margin-top:-6px"></div>
 
     <div class="card">
       <label>店舗</label>
@@ -155,8 +156,12 @@
 
     <div class="card" id="batch-card">
       <div class="top"><b style="font-size:.95rem">📚 まとめて記録(保存した写真を何枚も選ぶ)</b></div>
-      <div class="sub" style="margin-top:6px">写真を一度に選ぶと、番号を順に読み取ります。<b>利用日は、写真を見ながら確認</b>して、記録します。1回に40枚までです。店舗は、上で選んだ店舗です。</div>
-      <button class="sec" id="btn-batch" type="button" style="width:100%">📚 写真をまとめて選ぶ</button>
+      <div class="sub" style="margin-top:6px">写真を一度に選ぶと、番号を順に読み取ります。<b>利用日は、写真を見ながら確認</b>して、記録します。一覧には、60枚まで入ります(記録したら、また追加できます)。店舗は、上で選んだ店舗です。</div>
+      <div id="batch-drop" style="margin-top:10px;border:2px dashed var(--line);border-radius:12px;padding:22px 12px;text-align:center;color:var(--sub);font-size:.95rem;line-height:1.7">
+        ここに、写真を<b>ドラッグ&ドロップ</b>(何回でも、追加できます)<br>
+        <span style="font-size:.8rem">パソコン向け。複数の写真を、まとめて、ここに落としてください</span>
+      </div>
+      <button class="sec" id="btn-batch" type="button" style="width:100%;margin-top:10px">📚 写真をまとめて選ぶ(何回でも、追加できます)</button>
       <input id="batch-files" type="file" accept="image/*" multiple class="hidden">
       <div id="batch-tools" class="hidden" style="margin-top:12px">
         <div class="row">
@@ -234,10 +239,13 @@ function render() {
   $('login').classList.toggle('hidden', !!session);
   $('app').classList.toggle('hidden', !session);
   if (session) { setupApp(); }
+  else { appReady = false; myStore = null; $('store').replaceChildren(); }   // ログアウトしたら、店舗の選択肢を作り直す
 }
 $('btn-login').addEventListener('click', async () => {
-  const email = $('email').value.trim(), password = $('password').value;
-  if (!email || !password) { showMsg($('login-msg'), 'warn', 'メールアドレスとパスワードを入力してください'); return; }
+  const idRaw = $('email').value.trim(), password = $('password').value;
+  if (!idRaw || !password) { showMsg($('login-msg'), 'warn', 'IDとパスワードを入力してください'); return; }
+  // 店舗のIDは、後ろの部分を自動でつける(@が入っていれば、そのまま使う)
+  const email = idRaw.includes('@') ? idRaw : idRaw.toLowerCase() + '@store.olivespa.co.jp';
   $('btn-login').disabled = true;
   const { error } = await sb.auth.signInWithPassword({ email, password });
   $('btn-login').disabled = false;
@@ -247,12 +255,23 @@ $('btn-logout').addEventListener('click', async () => { await sb.auth.signOut();
 
 /* ---------- 記録画面 ---------- */
 let appReady = false;
-function setupApp() {
+let myStore = null;      // 店舗のIDなら、その店舗の名前(管理部などは null=全店舗)
+async function setupApp() {
   if (appReady) { loadRecent(); return; }
   appReady = true;
-  STORES.forEach(s => $('store').append(el('option', { value: s, textContent: s })));
+  let list = STORES;
+  try {
+    // ログインしたIDが、店舗のIDなら、その店舗だけを表示する
+    const { data } = await sb.from('store_accounts').select('store_name').limit(1);
+    if (data && data[0]) { myStore = data[0].store_name; list = [myStore]; }
+  } catch (e) { /* 表がまだ無い、または管理部のID:全店舗 */ }
+  $('store').replaceChildren();
+  list.forEach(s => $('store').append(el('option', { value: s, textContent: s })));
   const saved = safeGet('scan_store');
-  if (saved && STORES.includes(saved)) $('store').value = saved;
+  if (!myStore && saved && STORES.includes(saved)) $('store').value = saved;
+  $('store').disabled = !!myStore;
+  const who = session && session.user ? session.user.email : '';
+  $('whoami').textContent = myStore ? `ログイン中: ${myStore}` : `ログイン中: ${who}(全店舗)`;
   $('used-date').value = todayJST();
   $('used-date').max = todayJST();
   $('store').addEventListener('change', () => { safeSet('scan_store', $('store').value); loadRecent(); updateButton(); });
@@ -409,6 +428,14 @@ async function saveRow(row) {
     }
   }
   const { error } = await sb.from('usage_log').insert(rec);
+  if (error && (error.code === '23505' || /duplicate key/i.test(error.message || ''))) {
+    // 同じ券番号が、すでに記録されている(データベースが、重複を止めた)
+    const k0 = failed.findIndex(f => f.ticket_number === row.ticket_number);
+    if (k0 >= 0) failed.splice(k0, 1);
+    renderFailed();
+    showMsg($('check-area'), 'ng', `⚠ ${row.ticket_number} は、すでに記録されています。重複のため、記録していません。`);
+    return false;
+  }
   if (error) {
     if (!failed.some(f => f.ticket_number === row.ticket_number)) failed.push(row);
     renderFailed();
@@ -496,16 +523,8 @@ async function loadRecent() {
   if (error) { ul.replaceChildren(el('li', { textContent: '読み込めませんでした' })); return; }
   if (!data.length) { ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' })); return; }
   ul.replaceChildren(...data.map(r => {
-    const del = el('button', { className: 'del', textContent: '取消' });
-    del.addEventListener('click', async () => {
-      if (!confirm(`${r.ticket_number} の記録を取り消しますか?`)) return;
-      const { error: e2 } = await sb.from('usage_log').delete().eq('id', r.id);
-      if (e2) alert('取り消せませんでした(記録から1日以上たったものは、取り消せません)');
-      loadRecent();
-    });
     return el('li', {}, [
-      el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })]),
-      del
+      el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })])
     ]);
   }));
 }
@@ -800,17 +819,24 @@ async function runBatchOcr() {
   } finally { batchBusy = false; }
 }
 $('btn-batch').addEventListener('click', () => $('batch-files').click());
-$('batch-files').addEventListener('change', (ev) => {
-  const files = [...ev.target.files]; ev.target.value = '';
-  if (!files.length) return;
-  const room = 40 - batch.length;
+function addBatchFiles(filesIn) {
+  const files = [...filesIn].filter(f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ''));
+  if (!files.length) { showMsg($('batch-msg'), 'warn', '写真(画像)のファイルを、選んでください。'); return; }
+  const room = 60 - batch.length;
   const take = files.slice(0, Math.max(0, room));
-  if (files.length > take.length) showMsg($('batch-msg'), 'warn', `1回に40枚までです。${take.length}枚だけ追加しました。残りは、記録したあとに、もう一度選んでください。`);
+  if (files.length > take.length) showMsg($('batch-msg'), 'warn', `一覧には60枚までです。${take.length}枚だけ追加しました。残りは、記録したあとに、もう一度追加してください。`);
   else $('batch-msg').replaceChildren();
   take.forEach(f => { const r = makeRow(f); batch.push(r); $('batch-list').append(r.box); });
   refreshAll();
   runBatchOcr();
-});
+}
+$('batch-files').addEventListener('change', (ev) => { const fl = [...ev.target.files]; ev.target.value = ''; if (fl.length) addBatchFiles(fl); });
+// ドラッグ&ドロップ(まとめて記録のカード全体に、落とせる)
+['dragenter', 'dragover'].forEach(t => $('batch-card').addEventListener(t, (e) => { e.preventDefault(); $('batch-drop').style.borderColor = 'var(--accent)'; $('batch-drop').style.background = 'rgba(59,130,246,.12)'; }));
+['dragleave', 'drop'].forEach(t => $('batch-card').addEventListener(t, (e) => { e.preventDefault(); $('batch-drop').style.borderColor = ''; $('batch-drop').style.background = ''; }));
+$('batch-card').addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) addBatchFiles(e.dataTransfer.files); });
+// カードの外に、写真を落としても、ブラウザが写真を開いてしまわないようにする
+['dragover', 'drop'].forEach(t => window.addEventListener(t, (e) => { if (!e.target.closest || !e.target.closest('#batch-card')) e.preventDefault(); }));
 $('btn-bulk-date').addEventListener('click', () => {
   const d = $('batch-bulk-date').value;
   if (!d) { showMsg($('batch-msg'), 'warn', '日付を選んでから、押してください。'); return; }
@@ -849,16 +875,24 @@ $('btn-batch-save').addEventListener('click', () => {
       $('batch-confirm').replaceChildren(el('div', { className: 'msg ng', textContent: '写真を保存できなかったため、1枚も記録していません。各行に、理由が出ています。もう一度、「記録する」を押してください。' }));
       return;
     }
-    const { error } = await sb.from('usage_log').insert(payload);
+    const { data: insData, error } = await sb.from('usage_log').upsert(payload, { onConflict: 'ticket_number', ignoreDuplicates: true }).select('ticket_number');
     if (error) {
       $('batch-confirm').replaceChildren(el('div', { className: 'msg ng', textContent: '記録できませんでした。通信を確認して、もう一度押してください。(一覧は残してあります)' }));
       return;
     }
-    okRows.forEach(r => { const k = batch.indexOf(r); if (k >= 0) batch.splice(k, 1); URL.revokeObjectURL(r.url); r.box.remove(); });
+    const savedSet = new Set((insData || []).map(x => x.ticket_number));
+    const dupRows = okRows.filter(r => !savedSet.has(r.ticket));      // すでに記録されていて、データベースが止めた券
+    dupRows.forEach(r => { r.prior = 'すでに記録されています'; });
+    okRows.filter(r => savedSet.has(r.ticket)).forEach(r => { const k = batch.indexOf(r); if (k >= 0) batch.splice(k, 1); URL.revokeObjectURL(r.url); r.box.remove(); });
+    refreshAll();
     const ng = rows.length - okRows.length;
-    $('batch-confirm').replaceChildren(ng
-      ? el('div', { className: 'msg ng', textContent: `✓ ${okRows.length}枚を記録しました。ただし、${ng}枚は、写真を保存できなかったため、記録していません。一覧に残っています(理由は各行に出ています)。もう一度、「記録する」を押してください。` })
-      : el('div', { className: 'msg ok', textContent: `✓ ${okRows.length}枚を記録しました。` }));
+    const done = okRows.length - dupRows.length;
+    const warn = [];
+    if (ng) warn.push(`${ng}枚は、写真を保存できなかったため、記録していません`);
+    if (dupRows.length) warn.push(`${dupRows.length}枚は、すでに記録されていたため、記録していません`);
+    $('batch-confirm').replaceChildren(warn.length
+      ? el('div', { className: 'msg ng', textContent: `✓ ${done}枚を記録しました。ただし、${warn.join('。')}。一覧に残っています(理由は各行に出ています)。` })
+      : el('div', { className: 'msg ok', textContent: `✓ ${done}枚を記録しました。` }));
     refreshAll(); loadRecent();
   });
   $('batch-confirm').replaceChildren(
