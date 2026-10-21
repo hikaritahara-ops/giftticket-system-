@@ -511,6 +511,7 @@
   <button class="main-nav-tab" data-page="page-pos" onclick="switchPage('page-pos', this)">💳 POS取り込み</button>
   <button class="main-nav-tab" data-page="page-ticket" onclick="switchPage('page-ticket', this)">🎟 発券データ取り込み</button>
   <button class="main-nav-tab" data-page="page-sold" onclick="switchPage('page-sold', this)">🛒 販売データ取り込み</button>
+  <button class="main-nav-tab" data-page="page-store" onclick="switchPage('page-store', this)">🏪 店舗の記録</button>
 </nav>
 
 <div class="container">
@@ -747,6 +748,30 @@
 
   </div>
 
+  <!-- ============ ページ5: 店舗の記録(iPadの記録画面で溜まった券) ============ -->
+  <div class="page" id="page-store">
+    <div class="card">
+      <h2><div class="left">店舗の記録(iPadで、店舗が記録した券)</div></h2>
+      <div class="hint">店舗が iPad の記録画面で記録した券の一覧です。写真の読み取り結果(照合結果)に、同じ券番号があるかを、並べて確認できます。</div>
+      <div id="store-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0"></div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">店舗</label><select id="store-filter-store" onchange="renderStoreView()"><option value="">すべて</option></select></div>
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">利用月</label><select id="store-filter-month" onchange="renderStoreView()"><option value="">すべて</option></select></div>
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">写真との突合</label>
+          <select id="store-filter-match" onchange="renderStoreView()">
+            <option value="">すべて</option>
+            <option value="match">写真と一致</option>
+            <option value="nophoto">写真なし(店舗の記録のみ)</option>
+            <option value="diff">写真と食い違い</option>
+          </select></div>
+        <button class="btn-small" onclick="loadStoreView()">再読み込み</button>
+        <button class="btn-small" onclick="exportStoreExcel()">📥 Excelで出力</button>
+      </div>
+      <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。</div>
+      <div id="store-view-body"></div>
+    </div>
+  </div>
+
   <!-- ============ ページ4: 販売データ取り込み ============ -->
   <div class="page" id="page-sold">
 
@@ -936,6 +961,126 @@ function switchPage(pageId, btn) {
   if (pageId === 'page-pos' && !posViewLoaded) loadPosStoreView();
   if (pageId === 'page-ticket' && !ticketViewLoaded) loadTicketStoreView();
   if (pageId === 'page-sold' && !soldViewLoaded) loadSoldView();
+  if (pageId === 'page-store' && !storeViewLoaded) loadStoreView();
+}
+
+// ============ 店舗の記録(usage_log)と、写真の読み取り結果を並べる ============
+let storeViewLoaded = false;
+let storeRows = [];
+function escH(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function loadStoreView() {
+  const body = document.getElementById('store-view-body');
+  body.innerHTML = '<div class="loading"><div class="loading-spinner"></div>読み込み中...</div>';
+  try {
+    const r1 = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?select=*&order=created_at.desc&limit=1000`, { headers: sbHeaders() });
+    if (!r1.ok) throw new Error('usage_log HTTP ' + r1.status);
+    const logs = await r1.json();
+    const nums = [...new Set(logs.map(l => l.ticket_number).filter(Boolean))];
+    const photo = {};
+    for (let i = 0; i < nums.length; i += 100) {
+      const chunk = nums.slice(i, i + 100);
+      const q = chunk.map(n => '"' + n + '"').join(',');
+      const r2 = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=ticket_number,judgment,judgment_reason,store_name,used_date,used_date_confirmed&ticket_number=in.(${encodeURIComponent(q)})`, { headers: sbHeaders() });
+      if (r2.ok) (await r2.json()).forEach(x => { photo[x.ticket_number] = x; });
+    }
+    storeRows = logs.map(l => ({ log: l, photo: photo[l.ticket_number] || null }));
+    storeViewLoaded = true;
+    // 店舗の選択肢
+    const sel = document.getElementById('store-filter-store');
+    const cur = sel.value;
+    const stores = [...new Set(logs.map(l => l.store_name).filter(Boolean))].sort();
+    sel.innerHTML = '<option value="">すべて</option>' + stores.map(s => `<option value="${escH(s)}">${escH(s)}</option>`).join('');
+    sel.value = stores.includes(cur) ? cur : '';
+    const msel = document.getElementById('store-filter-month');
+    const curM = msel.value;
+    const months = [...new Set(logs.map(l => String(l.used_date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+    msel.innerHTML = '<option value="">すべて</option>' + months.map(m => `<option value="${m}">${m.replace('-', '年')}月</option>`).join('');
+    msel.value = months.includes(curM) ? curM : '';
+    renderStoreView();
+  } catch (e) {
+    body.innerHTML = '<div class="hint" style="color:var(--danger)">読み込みに失敗しました(' + escH(e.message) + ')。ログインし直して、「再読み込み」を押してください。</div>';
+  }
+}
+function storeMatchState(row) {
+  const p = row.photo, l = row.log;
+  if (!p) return 'nophoto';
+  const pd = p.used_date_confirmed || p.used_date || '';
+  const dateDiff = pd && l.used_date && String(pd).slice(0, 10) !== String(l.used_date).slice(0, 10);
+  const storeDiff = p.store_name && l.store_name && p.store_name !== l.store_name;
+  return (dateDiff || storeDiff) ? 'diff' : 'match';
+}
+function storeFilteredRows() {
+  const fs = document.getElementById('store-filter-store').value;
+  const fm = document.getElementById('store-filter-match').value;
+  const fmo = document.getElementById('store-filter-month').value;
+  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fm || storeMatchState(r) === fm) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
+}
+const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
+const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
+function exportStoreExcel() {
+  const rows = storeFilteredRows();
+  if (!rows.length) { showToast('出力する記録がありません', 'error'); return; }
+  const stateText = { match: '写真と一致', nophoto: '写真なし', diff: '食い違い' };
+  const toObj = (r) => {
+    const l = r.log, p = r.photo, h = (l.ticket_number || '')[0];
+    return {
+      '利用日': l.used_date ? String(l.used_date).slice(0, 10) : '',
+      '店舗': l.store_name || '',
+      '券番号': l.ticket_number || '',
+      'コース': STORE_COURSE[h] || '',
+      '額面': STORE_FACE[h] != null ? STORE_FACE[h] : '',
+      'スタッフ割': l.staff_discount ? '○' : '',
+      '想定金額': l.expected_amount != null ? l.expected_amount : '',
+      '入力方法': l.input_method || '',
+      '記録日時': l.created_at ? new Date(l.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
+      '記録者': l.created_by || '',
+      '突合': stateText[storeMatchState(r)] || '',
+      '写真の利用日': p ? String(p.used_date_confirmed || p.used_date || '').slice(0, 10) : '',
+      '写真の判定': p ? (p.judgment || '') : '',
+      '備考': l.note || ''
+    };
+  };
+  const sorted = rows.slice().sort((a, b) => String(a.log.used_date).localeCompare(String(b.log.used_date)) || String(a.log.ticket_number).localeCompare(String(b.log.ticket_number)));
+  const wb = XLSX.utils.book_new();
+  const cols = [10, 16, 12, 18, 8, 10, 10, 10, 18, 28, 12, 12, 12, 24].map(w => ({ wch: w }));
+  const add = (name, list) => {
+    const ws = XLSX.utils.json_to_sheet(list.map(toObj));
+    ws['!cols'] = cols;
+    XLSX.utils.book_append_sheet(wb, ws, name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31) || 'シート');
+  };
+  add('全件', sorted);
+  const names = [...new Set(sorted.map(r => r.log.store_name).filter(Boolean))];
+  names.forEach(n => add(n, sorted.filter(r => r.log.store_name === n)));
+  const mo = document.getElementById('store-filter-month').value || 'all';
+  XLSX.writeFile(wb, `店舗の記録_${mo}.xlsx`);
+  showToast('Excelを出力しました', 'success');
+}
+function renderStoreView() {
+  const fs = document.getElementById('store-filter-store').value;
+  const fm = document.getElementById('store-filter-match').value;
+  const all = storeRows;
+  const cnt = { match: 0, nophoto: 0, diff: 0 };
+  all.forEach(r => cnt[storeMatchState(r)]++);
+  document.getElementById('store-summary').innerHTML =
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">店舗の記録</div><div style="font-size:1.4rem;font-weight:700">${all.length}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${cnt.match}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真なし</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${cnt.nophoto}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">食い違い</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${cnt.diff}件</div></div>`;
+  const rows = storeFilteredRows();
+  const body = document.getElementById('store-view-body');
+  if (!rows.length) { body.innerHTML = '<div class="hint">該当する記録がありません。</div>'; return; }
+  const badge = (st) => st === 'match' ? '<span class="badge badge-ok">写真と一致</span>'
+    : st === 'diff' ? '<span class="badge badge-danger">食い違い</span>'
+    : '<span class="badge badge-warn">写真なし</span>';
+  const fmt = (d) => d ? String(d).slice(0, 10) : '-';
+  const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>写真の利用日</th><th>写真の判定</th></tr></thead><tbody>' +
+    rows.map(r => {
+      const l = r.log, p = r.photo, st = storeMatchState(r);
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
 }
 let posViewLoaded = false;
 let ticketViewLoaded = false;
