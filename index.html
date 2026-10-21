@@ -764,11 +764,24 @@
             <option value="nophoto">写真なし(店舗の記録のみ)</option>
             <option value="diff">写真と食い違い</option>
           </select></div>
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">お会計データとの突合</label>
+          <select id="store-filter-pos" onchange="renderStoreView()">
+            <option value="">すべて</option>
+            <option value="ok">お会計と一致</option>
+            <option value="none">お会計なし(要確認)</option>
+            <option value="nodata">お会計データ未取込</option>
+          </select></div>
         <button class="btn-small" onclick="loadStoreView()">再読み込み</button>
         <button class="btn-small" onclick="exportStoreExcel()">📥 Excelで出力</button>
       </div>
       <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。</div>
       <div id="store-view-body"></div>
+      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(店舗の記録 と お会計データ)</h3>
+      <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。店舗の記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
+      <div id="store-agg"></div>
+      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">お会計はあるが、店舗の記録がない(候補)</h3>
+      <div class="hint">お会計データに、券の金額(スタッフ割の金額も含む)と同じ会計があり、店舗の記録と結びつかなかったものです。まだ記録していない券や、同じ金額の別の会計も含まれるので、「候補」として見てください。</div>
+      <div id="store-pos-only"></div>
     </div>
   </div>
 
@@ -985,7 +998,8 @@ async function loadStoreView() {
       const r2 = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=ticket_number,judgment,judgment_reason,store_name,used_date,used_date_confirmed&ticket_number=in.(${encodeURIComponent(q)})`, { headers: sbHeaders() });
       if (r2.ok) (await r2.json()).forEach(x => { photo[x.ticket_number] = x; });
     }
-    storeRows = logs.map(l => ({ log: l, photo: photo[l.ticket_number] || null }));
+    storeRows = logs.map(l => ({ log: l, photo: photo[l.ticket_number] || null, pos: 'nodata' }));
+    await matchStoreWithPos(logs);
     storeViewLoaded = true;
     // 店舗の選択肢
     const sel = document.getElementById('store-filter-store');
@@ -1003,6 +1017,61 @@ async function loadStoreView() {
     body.innerHTML = '<div class="hint" style="color:var(--danger)">読み込みに失敗しました(' + escH(e.message) + ')。ログインし直して、「再読み込み」を押してください。</div>';
   }
 }
+// ---- お会計データとの突合:店舗・利用日・金額が合う会計を、1件ずつ使って結びつける ----
+let storePosLeft = [];      // 結びつかなかった会計(券の金額のもの)
+let storePosAll = [];       // 取り込んだお会計(利用日の範囲内)
+let storePosLast = {};      // 店舗ごとの、お会計データがある最後の日
+const STORE_TICKET_AMOUNTS = new Set([15840, 12672, 26400, 21120, 31680, 25344, 90000, 72000, 5040, 4032, 7560, 6048]);
+function posCandidates(l) {
+  if (l.expected_amount != null) return [Number(l.expected_amount)];
+  const h = (l.ticket_number || '')[0];
+  if (h === 'N') return [5040, 7560, 4032, 6048];
+  const f = STORE_FACE[h];
+  return f ? [f, Math.round(f * 0.8)] : [];
+}
+async function matchStoreWithPos(logs) {
+  storePosLeft = []; storePosAll = []; storePosLast = {};
+  const dated = logs.filter(l => l.used_date && l.store_name);
+  if (!dated.length) return;
+  const posStores = [...new Set(dated.map(l => STORE_POS_MAPPING[l.store_name]).filter(Boolean))];
+  const dates = dated.map(l => String(l.used_date).slice(0, 10)).sort();
+  const mn = dates[0], mx = dates[dates.length - 1];
+  const inList = posStores.map(n => '"' + n + '"').join(',');
+  const pos = [];
+  for (let off = 0; off < 20000; off += 1000) {
+    const url = `${SUPABASE_URL}/rest/v1/pos_sales?select=id,store_name,sale_date,sales_amount,customer_name&sale_date=gte.${mn}&sale_date=lte.${mx}&store_name=in.(${encodeURIComponent(inList)})&order=id.asc&limit=1000&offset=${off}`;
+    const r = await fetch(url, { headers: sbHeaders() });
+    if (!r.ok) throw new Error('pos_sales HTTP ' + r.status);
+    const part = await r.json();
+    pos.push(...part);
+    if (part.length < 1000) break;
+  }
+  // 店舗ごとの、お会計データがある最後の日(それより後の利用は、未取込として扱う)
+  const lastPos = {};
+  pos.forEach(p => { if (!lastPos[p.store_name] || p.sale_date > lastPos[p.store_name]) lastPos[p.store_name] = p.sale_date; });
+  storePosAll = pos; storePosLast = lastPos;
+  const pool = new Map();
+  pos.forEach(p => {
+    const k = `${p.store_name}|${String(p.sale_date).slice(0, 10)}|${Number(p.sales_amount)}`;
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push(p);
+  });
+  const order = storeRows.slice().sort((a, b) => String(a.log.used_date).localeCompare(String(b.log.used_date)) || String(a.log.created_at).localeCompare(String(b.log.created_at)));
+  order.forEach(row => {
+    const l = row.log;
+    const ps = STORE_POS_MAPPING[l.store_name];
+    const d = l.used_date ? String(l.used_date).slice(0, 10) : '';
+    if (!ps || !d) { row.pos = 'nodata'; return; }
+    for (const amt of posCandidates(l)) {
+      const arr = pool.get(`${ps}|${d}|${amt}`);
+      if (arr && arr.length) { arr.shift(); row.pos = 'ok'; return; }
+    }
+    // 会計が見つからない:お会計データが、その日まで取り込まれていなければ「未取込」
+    row.pos = (lastPos[ps] && d <= lastPos[ps]) ? 'none' : 'nodata';
+  });
+  pool.forEach(arr => arr.forEach(p => { if (STORE_TICKET_AMOUNTS.has(Number(p.sales_amount))) storePosLeft.push(p); }));
+  storePosLeft.sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)));
+}
 function storeMatchState(row) {
   const p = row.photo, l = row.log;
   if (!p) return 'nophoto';
@@ -1015,7 +1084,8 @@ function storeFilteredRows() {
   const fs = document.getElementById('store-filter-store').value;
   const fm = document.getElementById('store-filter-match').value;
   const fmo = document.getElementById('store-filter-month').value;
-  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fm || storeMatchState(r) === fm) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
+  const fp = document.getElementById('store-filter-pos').value;
+  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fm || storeMatchState(r) === fm) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
 }
 const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
 const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
@@ -1037,6 +1107,7 @@ function exportStoreExcel() {
       '記録日時': l.created_at ? new Date(l.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
       '記録者': l.created_by || '',
       '突合': stateText[storeMatchState(r)] || '',
+      'お会計との突合': ({ ok: '一致', none: 'お会計なし', nodata: '未取込' })[r.pos] || '',
       '写真の利用日': p ? String(p.used_date_confirmed || p.used_date || '').slice(0, 10) : '',
       '写真の判定': p ? (p.judgment || '') : '',
       '備考': l.note || ''
@@ -1057,6 +1128,61 @@ function exportStoreExcel() {
   XLSX.writeFile(wb, `店舗の記録_${mo}.xlsx`);
   showToast('Excelを出力しました', 'success');
 }
+function renderStoreAgg() {
+  const box = document.getElementById('store-agg');
+  if (!box) return;
+  const fs = document.getElementById('store-filter-store').value;
+  const fmo = document.getElementById('store-filter-month').value;
+  const rev = {}; Object.keys(STORE_POS_MAPPING).forEach(k => { rev[STORE_POS_MAPPING[k]] = k; });
+  const g = new Map();   // 店舗(POS名)|日 → { logSum, logN, posSum, posN }
+  const get = (ps, d) => { const k = ps + '|' + d; if (!g.has(k)) g.set(k, { ps, d, logSum: 0, logN: 0, posSum: 0, posN: 0 }); return g.get(k); };
+  storeRows.forEach(r => {
+    const l = r.log, ps = STORE_POS_MAPPING[l.store_name], d = l.used_date ? String(l.used_date).slice(0, 10) : '';
+    if (!ps || !d) return;
+    const amt = l.expected_amount != null ? Number(l.expected_amount) : (posCandidates(l)[0] || 0);
+    const e = get(ps, d); e.logSum += amt; e.logN++;
+  });
+  storePosAll.forEach(p => {
+    if (!STORE_TICKET_AMOUNTS.has(Number(p.sales_amount))) return;
+    const d = String(p.sale_date).slice(0, 10);
+    const e = get(p.store_name, d); e.posSum += Number(p.sales_amount); e.posN++;
+  });
+  let list = [...g.values()].filter(e => (!fs || rev[e.ps] === fs) && (!fmo || e.d.slice(0, 7) === fmo));
+  // 店舗の記録が全くない日で、お会計だけある日は、記録の入力が進んでいない可能性が高いので、記録のある店舗の分だけ出す
+  const loggedStores = new Set(storeRows.map(r => STORE_POS_MAPPING[r.log.store_name]).filter(Boolean));
+  list = list.filter(e => loggedStores.has(e.ps));
+  if (!list.length) { box.innerHTML = '<div class="hint">該当するデータがありません。</div>'; return; }
+  const st = (e) => {
+    if (storePosLast[e.ps] == null || e.d > storePosLast[e.ps]) return 'nodata';
+    return e.logSum === e.posSum ? 'ok' : (e.logSum === 0 ? 'nolog' : 'diff');
+  };
+  list.sort((a, b) => b.d.localeCompare(a.d) || (rev[a.ps] || '').localeCompare(rev[b.ps] || ''));
+  const yen = (n) => '¥' + Number(n).toLocaleString();
+  const lab = { ok: '<span class="badge badge-ok">一致</span>', diff: '<span class="badge badge-danger">差額あり</span>', nolog: '<span class="badge badge-warn">記録なし</span>', nodata: '<span class="badge badge-warn">お会計未取込</span>' };
+  const cnt = { ok: 0, diff: 0, nolog: 0, nodata: 0 };
+  list.forEach(e => cnt[st(e)]++);
+  const sumLog = list.filter(e => st(e) !== 'nodata').reduce((a, e) => a + e.logSum, 0);
+  const sumPos = list.filter(e => st(e) !== 'nodata').reduce((a, e) => a + e.posSum, 0);
+  box.innerHTML = `<div class="hint">一致 ${cnt.ok}日 / 差額あり ${cnt.diff}日 / 記録なし ${cnt.nolog}日 / 未取込 ${cnt.nodata}日。お会計が取り込み済みの日の合計: 店舗の記録 ${yen(sumLog)}、お会計 ${yen(sumPos)}、差額 ${yen(sumPos - sumLog)}</div>` +
+    '<div class="table-scroll"><table><thead><tr><th>日付</th><th>店舗</th><th>店舗の記録(枚数)</th><th>記録の合計</th><th>お会計(件数)</th><th>お会計の合計</th><th>差額(お会計−記録)</th><th>判定</th></tr></thead><tbody>' +
+    list.slice(0, 400).map(e => {
+      const s2 = st(e), diff = e.posSum - e.logSum;
+      return `<tr><td>${escH(e.d)}</td><td>${escH(rev[e.ps] || e.ps)}</td><td>${e.logN}枚</td><td>${yen(e.logSum)}</td><td>${s2 === 'nodata' ? '-' : e.posN + '件'}</td><td>${s2 === 'nodata' ? '-' : yen(e.posSum)}</td><td style="${s2 === 'diff' ? 'color:var(--danger);font-weight:700' : ''}">${s2 === 'nodata' ? '-' : (diff > 0 ? '+' : '') + diff.toLocaleString()}</td><td>${lab[s2]}</td></tr>`;
+    }).join('') + '</tbody></table></div>' + (list.length > 400 ? '<div class="hint">先頭の400行だけ表示しています。店舗・月で絞ってください。</div>' : '');
+}
+function renderStorePosOnly() {
+  const box = document.getElementById('store-pos-only');
+  if (!box) return;
+  const fs = document.getElementById('store-filter-store').value;
+  const fmo = document.getElementById('store-filter-month').value;
+  const ps = fs ? STORE_POS_MAPPING[fs] : null;
+  const list = storePosLeft.filter(p => (!ps || p.store_name === ps) && (!fmo || String(p.sale_date).slice(0, 7) === fmo));
+  if (!list.length) { box.innerHTML = '<div class="hint">該当する会計は、ありません。</div>'; return; }
+  const rev = {}; Object.keys(STORE_POS_MAPPING).forEach(k => { rev[STORE_POS_MAPPING[k]] = k; });
+  box.innerHTML = `<div class="hint">${list.length}件</div><div class="table-scroll"><table><thead><tr><th>会計日</th><th>店舗</th><th>金額</th><th>お客様名</th></tr></thead><tbody>` +
+    list.slice(0, 300).map(p => `<tr><td>${escH(String(p.sale_date).slice(0, 10))}</td><td>${escH(rev[p.store_name] || p.store_name)}</td><td>¥${Number(p.sales_amount).toLocaleString()}</td><td>${escH(p.customer_name || '')}</td></tr>`).join('') +
+    '</tbody></table></div>' + (list.length > 300 ? '<div class="hint">先頭の300件だけ表示しています。店舗・月で絞ってください。</div>' : '');
+}
 function renderStoreView() {
   const fs = document.getElementById('store-filter-store').value;
   const fm = document.getElementById('store-filter-match').value;
@@ -1067,19 +1193,25 @@ function renderStoreView() {
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">店舗の記録</div><div style="font-size:1.4rem;font-weight:700">${all.length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${cnt.match}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">写真なし</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${cnt.nophoto}件</div></div>` +
-    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">食い違い</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${cnt.diff}件</div></div>`;
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">食い違い</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${cnt.diff}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${all.filter(r => r.pos === 'ok').length}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計なし(要確認)</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${all.filter(r => r.pos === 'none').length}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計データ未取込</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${all.filter(r => r.pos === 'nodata').length}件</div></div>`;
+  renderStoreAgg();
+  renderStorePosOnly();
   const rows = storeFilteredRows();
   const body = document.getElementById('store-view-body');
   if (!rows.length) { body.innerHTML = '<div class="hint">該当する記録がありません。</div>'; return; }
   const badge = (st) => st === 'match' ? '<span class="badge badge-ok">写真と一致</span>'
     : st === 'diff' ? '<span class="badge badge-danger">食い違い</span>'
     : '<span class="badge badge-warn">写真なし</span>';
+  const posBadge = (v) => v === 'ok' ? '<span class="badge badge-ok">一致</span>' : v === 'none' ? '<span class="badge badge-danger">お会計なし</span>' : '<span class="badge badge-warn">未取込</span>';
   const fmt = (d) => d ? String(d).slice(0, 10) : '-';
   const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>写真の利用日</th><th>写真の判定</th><th>券の写真</th></tr></thead><tbody>' +
+  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>お会計</th><th>写真の利用日</th><th>写真の判定</th><th>券の写真</th></tr></thead><tbody>' +
     rows.map(r => {
       const l = r.log, p = r.photo, st = storeMatchState(r);
-      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td></tr>`;
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${posBadge(r.pos)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td></tr>`;
     }).join('') + '</tbody></table></div>';
 }
 // 店舗で保存した券の写真を、ログインしている人だけが見られるように、取り出して表示する
