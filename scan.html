@@ -357,10 +357,12 @@ function buildRow() {
     ticket_number: t, store_name: $('store').value, used_date: $('used-date').value,
     input_method: inputMethod, note: notes.join(' / ') || null,
     staff_discount: $('staff-disc').checked, expected_amount: expectedAmount(),
-    created_by: session && session.user ? session.user.email : null
+    created_by: session && session.user ? session.user.email : null,
+    _photo: currentPhoto
   };
 }
 function resetForNext() {
+  currentPhoto = null;
   $('ticket').value = ''; checked = null; inputMethod = '手入力';
   $('staff-disc').checked = false; $('n-course').value = ''; $('confirm-box').replaceChildren();
   $('big-no').textContent = '— — — — — — — —';
@@ -368,8 +370,27 @@ function resetForNext() {
   $('check-area').replaceChildren();
   updateButton();
 }
+let currentPhoto = null;   // 直近に撮った(選んだ)写真
+// 写真を小さくして(長辺1400px・JPEG)、非公開の保存場所に入れる。成功したら、保存先の名前を返す
+async function uploadPhoto(file, usedDate, ticket) {
+  try {
+    const canvas = await toCanvas(file, 1400);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.8));
+    if (!blob) return null;
+    const path = `${String(usedDate).slice(0, 7)}/${ticket}_${Date.now()}.jpg`;
+    const { error } = await sb.storage.from('ticket-photos').upload(path, blob, { contentType: 'image/jpeg' });
+    return error ? null : path;
+  } catch (e) { return null; }
+}
 async function saveRow(row) {
-  const { error } = await sb.from('usage_log').insert(row);
+  const { _photo, ...rec0 } = row;
+  const rec = Object.assign({}, rec0);
+  if (_photo) {
+    const path = await uploadPhoto(_photo, rec.used_date, rec.ticket_number);
+    if (path) rec.photo_path = path;
+    else rec.note = [rec.note, '写真の保存に失敗'].filter(Boolean).join(' / ');
+  }
+  const { error } = await sb.from('usage_log').insert(rec);
   if (error) {
     if (!failed.some(f => f.ticket_number === row.ticket_number)) failed.push(row);
     renderFailed();
@@ -464,6 +485,7 @@ const onPhoto = async (ev) => {
   inp.value = '';
   if (!f) return;
   const area = $('ocr-area');
+  currentPhoto = f;
   setTicket('', '手入力');
   showMsg(area, 'ok', '読み取り中...(初回は少し時間がかかります)');
   try {
@@ -760,15 +782,20 @@ $('btn-batch-save').addEventListener('click', () => {
   no.addEventListener('click', () => $('batch-confirm').replaceChildren());
   yes.addEventListener('click', async () => {
     yes.disabled = true; no.disabled = true;
-    const payload = rows.map(r => {
+    const payload = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      $('batch-confirm').replaceChildren(el('div', { className: 'msg warn', textContent: `写真を保存しながら、記録しています...(${i + 1}/${rows.length})` }));
+      const photoPath = await uploadPhoto(r.file, r.date, r.ticket);
       const notes = [];
       if (r.issued === false) notes.push('発券データなし');
       if (r.ticket[0] === 'N') notes.push(r.ncourse === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
       notes.push('まとめて記録');
-      return { ticket_number: r.ticket, store_name: $('store').value, used_date: r.date, input_method: r.method, note: notes.join(' / '),
+      if (!photoPath) notes.push('写真の保存に失敗');
+      payload.push({ photo_path: photoPath, ticket_number: r.ticket, store_name: $('store').value, used_date: r.date, input_method: r.method, note: notes.join(' / '),
                staff_discount: r.staff, expected_amount: amountFor(r.ticket, r.ncourse, r.staff),
-               created_by: session && session.user ? session.user.email : null };
-    });
+               created_by: session && session.user ? session.user.email : null });
+    }
     const { error } = await sb.from('usage_log').insert(payload);
     if (error) {
       $('batch-confirm').replaceChildren(el('div', { className: 'msg ng', textContent: '記録できませんでした。通信を確認して、もう一度押してください。(一覧は残してあります)' }));
