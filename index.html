@@ -1007,6 +1007,8 @@ let storePosLeft = [];      // 結びつかなかった会計(券の金額のも
 let storePosAll = [];       // 取り込んだお会計(利用日の範囲内)
 let storePosLast = {};      // 店舗ごとの、お会計データがある最後の日
 const STORE_TICKET_AMOUNTS = new Set([15840, 12672, 26400, 21120, 31680, 25344, 90000, 72000, 5040, 4032, 7560, 6048]);
+// チケット払いの会計(0円は除く)。1行に複数枚の分が合算されていたり、1枚が2行に分かれていることもある
+function isTicketPos(p) { return p.card_type === 'ﾁｹｯﾄ' && Number(p.sales_amount) > 0; }
 function posCandidates(l) {
   if (l.expected_amount != null) return [Number(l.expected_amount)];
   const h = (l.ticket_number || '')[0];
@@ -1024,11 +1026,11 @@ async function matchStoreWithPos(logs) {
   const inList = posStores.map(n => '"' + n + '"').join(',');
   const pos = [];
   for (let off = 0; off < 20000; off += 1000) {
-    const url = `${SUPABASE_URL}/rest/v1/pos_sales?select=id,store_name,sale_date,sales_amount,customer_name&sale_date=gte.${mn}&sale_date=lte.${mx}&store_name=in.(${encodeURIComponent(inList)})&order=id.asc&limit=1000&offset=${off}`;
+    const url = `${SUPABASE_URL}/rest/v1/pos_sales?select=id,store_name,card_type,sale_date,sales_amount,customer_name&sale_date=gte.${mn}&sale_date=lte.${mx}&store_name=in.(${encodeURIComponent(inList)})&order=id.asc&limit=1000&offset=${off}`;
     const r = await fetch(url, { headers: sbHeaders() });
     if (!r.ok) throw new Error('pos_sales HTTP ' + r.status);
     const part = await r.json();
-    pos.push(...part);
+    pos.push(...part.filter(isTicketPos));
     if (part.length < 1000) break;
   }
   // 店舗ごとの、お会計データがある最後の日(それより後の利用は、未取込として扱う)
@@ -1054,7 +1056,44 @@ async function matchStoreWithPos(logs) {
     // 会計が見つからない:お会計データが、その日まで取り込まれていなければ「未取込」
     row.pos = (lastPos[ps] && d <= lastPos[ps]) ? 'none' : 'nodata';
   });
-  pool.forEach(arr => arr.forEach(p => { if (STORE_TICKET_AMOUNTS.has(Number(p.sales_amount))) storePosLeft.push(p); }));
+  // 2回目:1行に複数枚が合算された会計(例:C+A=47,520)と、1枚が2行に分かれた会計(例:P=45,000×2)を結びつける
+  const left = new Map();   // 店舗|日 → 結びつかなかった会計(金額)
+  pool.forEach((arr, k) => { const [a, b] = k.split('|'); const kk = a + '|' + b; arr.forEach(p => { if (!left.has(kk)) left.set(kk, []); left.get(kk).push(p); }); });
+  const unm = new Map();    // 店舗|日 → 結びつかなかった券
+  order.forEach(row => {
+    if (row.pos !== 'none') return;
+    const kk = STORE_POS_MAPPING[row.log.store_name] + '|' + String(row.log.used_date).slice(0, 10);
+    if (!unm.has(kk)) unm.set(kk, []);
+    unm.get(kk).push(row);
+  });
+  unm.forEach((rows, kk) => {
+    const pl = left.get(kk) || [];
+    const take = (amt) => { const i = pl.findIndex(p => Number(p.sales_amount) === amt); if (i < 0) return false; pl.splice(i, 1); return true; };
+    // 2枚の合計が、1行の会計と合う
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].pos === 'ok') continue;
+      for (let j = i + 1; j < rows.length; j++) {
+        if (rows[j].pos === 'ok') continue;
+        const ca = posCandidates(rows[i].log), cb = posCandidates(rows[j].log);
+        let hit = false;
+        for (const a of ca) { for (const b of cb) { if (take(a + b)) { rows[i].pos = 'ok'; rows[j].pos = 'ok'; hit = true; break; } } if (hit) break; }
+        if (hit) break;
+      }
+    }
+    // 1枚が、半分ずつ2行に分かれている
+    rows.forEach(r => {
+      if (r.pos === 'ok') return;
+      for (const a of posCandidates(r.log)) {
+        if (a % 2) continue;
+        const h = a / 2, i1 = pl.findIndex(p => Number(p.sales_amount) === h);
+        if (i1 < 0) continue;
+        const i2 = pl.findIndex((p, i) => i !== i1 && Number(p.sales_amount) === h);
+        if (i2 < 0) continue;
+        pl.splice(Math.max(i1, i2), 1); pl.splice(Math.min(i1, i2), 1); r.pos = 'ok'; return;
+      }
+    });
+  });
+  left.forEach(arr => arr.forEach(p => storePosLeft.push(p)));
   storePosLeft.sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)));
 }
 function storeFilteredRows() {
@@ -1115,7 +1154,6 @@ function renderStoreAgg() {
     const e = get(ps, d); e.logSum += amt; e.logN++;
   });
   storePosAll.forEach(p => {
-    if (!STORE_TICKET_AMOUNTS.has(Number(p.sales_amount))) return;
     const d = String(p.sale_date).slice(0, 10);
     const e = get(p.store_name, d); e.posSum += Number(p.sales_amount); e.posN++;
   });
