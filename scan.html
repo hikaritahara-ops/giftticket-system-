@@ -375,22 +375,38 @@ function resetForNext() {
 let currentPhoto = null;   // 直近に撮った(選んだ)写真
 // 写真を小さくして(長辺1400px・JPEG)、非公開の保存場所に入れる。成功したら、保存先の名前を返す
 async function uploadPhoto(file, usedDate, ticket) {
+  let blob = null, ctype = 'image/jpeg', ext = 'jpg', why = '';
   try {
     const canvas = await toCanvas(file, 1400);
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.8));
-    if (!blob) return null;
-    const path = `${String(usedDate).slice(0, 7)}/${ticket}_${Date.now()}.jpg`;
-    const { error } = await sb.storage.from('ticket-photos').upload(path, blob, { contentType: 'image/jpeg' });
-    return error ? null : path;
-  } catch (e) { return null; }
+    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.8));
+  } catch (e) { why = '画像を小さくできませんでした'; }
+  if (!blob) {                                    // 小さくできないときは、元の写真をそのまま保存する
+    blob = file; ctype = file.type || 'image/jpeg';
+    ext = (ctype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+  }
+  let lastErr = why;
+  for (let k = 0; k < 2; k++) {                   // 失敗したら、1回だけやり直す
+    const path = `${String(usedDate).slice(0, 7)}/${ticket}_${Date.now()}.${ext}`;
+    try {
+      const { error } = await sb.storage.from('ticket-photos').upload(path, blob, { contentType: ctype });
+      if (!error) return { path, err: '' };
+      lastErr = (error.message || String(error)).slice(0, 120);
+    } catch (e) { lastErr = String(e && e.message || e).slice(0, 120); }
+  }
+  return { path: null, err: lastErr || '原因不明' };
 }
 async function saveRow(row) {
   const { _photo, ...rec0 } = row;
   const rec = Object.assign({}, rec0);
   if (_photo) {
-    const path = await uploadPhoto(_photo, rec.used_date, rec.ticket_number);
-    if (path) rec.photo_path = path;
-    else rec.note = [rec.note, '写真の保存に失敗'].filter(Boolean).join(' / ');
+    const up = await uploadPhoto(_photo, rec.used_date, rec.ticket_number);
+    if (up.path) rec.photo_path = up.path;
+    else {                                          // 写真が保存できなければ、記録しない(写真なしの記録を作らない)
+      row._why = '写真の保存に失敗: ' + up.err;
+      if (!failed.some(f => f.ticket_number === row.ticket_number)) failed.push(row);
+      renderFailed();
+      return false;
+    }
   }
   const { error } = await sb.from('usage_log').insert(rec);
   if (error) {
@@ -410,7 +426,7 @@ function renderFailed() {
   const nodes = failed.map(row => {
     const b = el('button', { className: 'sec', textContent: '再記録', style: 'margin-left:8px;padding:8px 14px' });
     b.addEventListener('click', async () => { b.disabled = true; await saveRow(row); });
-    return el('div', { className: 'msg ng' }, [`記録できなかった券:${row.ticket_number}(通信を確認して、再記録してください)`, b]);
+    return el('div', { className: 'msg ng' }, [`記録できなかった券:${row.ticket_number}(${row._why || '通信を確認して、再記録してください'})`, b]);
   });
   box.replaceChildren(...nodes);
 }
@@ -698,6 +714,7 @@ function refreshRow(r) {
   e.nwrap.classList.toggle('hidden', !isN);
   let kind = 'ok', text = '';
   if (r.busy) { kind = 'warn'; text = r.progress || '読み取り中...'; }
+  else if (r.upErr) { kind = 'ng'; text = '写真の保存に失敗しました(' + r.upErr + ')。もう一度、「記録する」を押してください。'; }
   else if (!TICKET_RE.test(r.ticket)) { kind = 'ng'; text = '番号が読み取れていません。写真を見て、番号を入力してください。'; }
   else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
   else if (r.dupInList) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります(重複のため、記録できません)'; }
@@ -814,23 +831,34 @@ $('btn-batch-save').addEventListener('click', () => {
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       $('batch-confirm').replaceChildren(el('div', { className: 'msg warn', textContent: `写真を保存しながら、記録しています...(${i + 1}/${rows.length})` }));
-      const photoPath = await uploadPhoto(r.file, r.date, r.ticket);
+      const up = await uploadPhoto(r.file, r.date, r.ticket);
+      if (!up.path) { r.upErr = up.err; continue; }     // 写真が保存できない券は、記録しない
+      r.upErr = '';
+      const photoPath = up.path;
       const notes = [];
       if (r.issued === false) notes.push('発券データなし');
       if (r.ticket[0] === 'N') notes.push(r.ncourse === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
       notes.push('まとめて記録');
-      if (!photoPath) notes.push('写真の保存に失敗');
       payload.push({ photo_path: photoPath, ticket_number: r.ticket, store_name: $('store').value, used_date: r.date, input_method: r.method, note: notes.join(' / '),
                staff_discount: r.staff, expected_amount: amountFor(r.ticket, r.ncourse, r.staff),
                created_by: session && session.user ? session.user.email : null });
+    }
+    const okRows = rows.filter(r => !r.upErr);
+    if (!payload.length) {
+      refreshAll();
+      $('batch-confirm').replaceChildren(el('div', { className: 'msg ng', textContent: '写真を保存できなかったため、1枚も記録していません。各行に、理由が出ています。もう一度、「記録する」を押してください。' }));
+      return;
     }
     const { error } = await sb.from('usage_log').insert(payload);
     if (error) {
       $('batch-confirm').replaceChildren(el('div', { className: 'msg ng', textContent: '記録できませんでした。通信を確認して、もう一度押してください。(一覧は残してあります)' }));
       return;
     }
-    rows.forEach(r => { const k = batch.indexOf(r); if (k >= 0) batch.splice(k, 1); URL.revokeObjectURL(r.url); r.box.remove(); });
-    $('batch-confirm').replaceChildren(el('div', { className: 'msg ok', textContent: `✓ ${rows.length}枚を記録しました。` }));
+    okRows.forEach(r => { const k = batch.indexOf(r); if (k >= 0) batch.splice(k, 1); URL.revokeObjectURL(r.url); r.box.remove(); });
+    const ng = rows.length - okRows.length;
+    $('batch-confirm').replaceChildren(ng
+      ? el('div', { className: 'msg ng', textContent: `✓ ${okRows.length}枚を記録しました。ただし、${ng}枚は、写真を保存できなかったため、記録していません。一覧に残っています(理由は各行に出ています)。もう一度、「記録する」を押してください。` })
+      : el('div', { className: 'msg ok', textContent: `✓ ${okRows.length}枚を記録しました。` }));
     refreshAll(); loadRecent();
   });
   $('batch-confirm').replaceChildren(
