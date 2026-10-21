@@ -738,7 +738,7 @@ function refreshRow(r) {
   else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
   else if (r.dupInList) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります(重複のため、記録できません)'; }
   else if (isN && !r.ncourse) { kind = 'warn'; text = 'マグマルームです。60分か90分かを選んでください。'; }
-  else if (!r.date) { kind = 'warn'; text = '利用日を入れてください。'; }
+  else if (!r.date) { kind = 'warn'; text = '利用日を入れてください。(今日の日付の写真は、パソコンに保存した日の可能性があるため、空にしています。上の「全部の利用日を、この日にする」も使えます)'; }
   else if (!r.dateOk) { kind = 'warn'; text = '利用日を、写真と見比べて、「日付OK」にチェックしてください。(最初の日付は、写真の日付を仮に入れています)'; }
   else {
     const amt = amountFor(r.ticket, r.ncourse, r.staff);
@@ -764,7 +764,7 @@ function refreshAll() {
 }
 function makeRow(file) {
   const r = { id: Math.random().toString(36).slice(2), file, url: URL.createObjectURL(file), ticket: '', method: '撮影読取',
-             date: jstDateOf(file.lastModified || Date.now()), dateOk: false, staff: false, ncourse: '', busy: true, progress: '順番を待っています...',
+             date: (file.lastModified && jstDateOf(file.lastModified) !== jstDateOf(Date.now())) ? jstDateOf(file.lastModified) : '', dateOk: false, staff: false, ncourse: '', busy: true, progress: '順番を待っています...',
              issued: null, prior: null, dupInList: false };
   const img = el('img', { src: r.url, alt: '券の写真' });
   img.addEventListener('click', () => img.classList.toggle('big'));
