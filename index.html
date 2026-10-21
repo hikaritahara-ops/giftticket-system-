@@ -1076,11 +1076,27 @@ function renderStoreView() {
     : '<span class="badge badge-warn">写真なし</span>';
   const fmt = (d) => d ? String(d).slice(0, 10) : '-';
   const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>写真の利用日</th><th>写真の判定</th></tr></thead><tbody>' +
+  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>突合</th><th>写真の利用日</th><th>写真の判定</th><th>券の写真</th></tr></thead><tbody>' +
     rows.map(r => {
       const l = r.log, p = r.photo, st = storeMatchState(r);
-      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td></tr>`;
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${badge(st)}</td><td>${p ? escH(fmt(p.used_date_confirmed || p.used_date)) : '-'}</td><td>${p ? escH(p.judgment) + (p.store_name && p.store_name !== l.store_name ? '(写真の店舗: ' + escH(p.store_name) + ')' : '') : '-'}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td></tr>`;
     }).join('') + '</tbody></table></div>';
+}
+// 店舗で保存した券の写真を、ログインしている人だけが見られるように、取り出して表示する
+async function viewTicketPhoto(path) {
+  try {
+    const url = `${SUPABASE_URL}/storage/v1/object/authenticated/ticket-photos/${String(path).split('/').map(encodeURIComponent).join('/')}`;
+    const res = await fetch(url, { headers: sbHeaders() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blobUrl = URL.createObjectURL(await res.blob());
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;cursor:zoom-out';
+    const img = document.createElement('img');
+    img.src = blobUrl; img.style.cssText = 'max-width:100%;max-height:100%;border-radius:8px;background:#fff';
+    ov.appendChild(img);
+    ov.addEventListener('click', () => { URL.revokeObjectURL(blobUrl); ov.remove(); });
+    document.body.appendChild(ov);
+  } catch (e) { showToast('写真を開けませんでした', 'error'); }
 }
 let posViewLoaded = false;
 let ticketViewLoaded = false;
