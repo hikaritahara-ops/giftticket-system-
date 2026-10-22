@@ -112,6 +112,40 @@
     <div class="sub">券を使ったら、券番号を入力して「記録する」を押してください。</div>
     <div class="sub" id="whoami" style="margin-top:-6px"></div>
 
+    <div class="row" style="margin:10px 0 4px">
+      <button type="button" id="tab-gift" class="rec" style="padding:14px">🎫 ギフトチケット</button>
+      <button type="button" id="tab-yutai" class="sec" style="padding:14px">🎁 優待券</button>
+    </div>
+
+    <div id="mode-yutai" class="hidden">
+      <div class="card">
+        <b style="font-size:1rem">🎁 優待券を、撮影して保存する</b>
+        <div class="tip">優待券は、金額の確認はしません。写真と券番号を保存して、店舗・日付ごとの枚数を、会計(POS)と合わせます。</div>
+        <label>店舗</label>
+        <select id="y-store"></select>
+        <label>撮影日(利用日)</label>
+        <input id="y-date" type="date">
+        <button class="cam-main" id="y-cam" type="button" style="margin-top:12px">📷 優待券を撮影する</button>
+        <input id="y-cam-file" type="file" accept="image/*" capture="environment" class="hidden">
+        <button class="sec" id="y-pick" type="button" style="margin-top:8px;width:100%">🖼 保存した写真から選ぶ(何枚でも)</button>
+        <input id="y-pick-file" type="file" accept="image/*" multiple class="hidden">
+        <div id="y-drop" style="margin-top:10px;border:2px dashed var(--line);border-radius:12px;padding:18px 12px;text-align:center;color:var(--sub);font-size:.9rem;line-height:1.7">
+          ここに、写真を<b>ドラッグ&ドロップ</b>(パソコン用。何回でも追加できます)
+        </div>
+        <div id="y-list"></div>
+        <div id="y-msg"></div>
+        <button class="rec" id="y-save" type="button" style="margin-top:12px" disabled>記録できる優待券がありません</button>
+        <div id="y-confirm"></div>
+      </div>
+      <div class="card">
+        <div class="top"><b style="font-size:.95rem">この店舗の、日付ごとの枚数(優待券)</b></div>
+        <div id="y-totals" style="margin:8px 0 14px"></div>
+        <div class="top"><b style="font-size:.95rem">この店舗の最近の記録(優待券)</b></div>
+        <ul class="list" id="y-recent"></ul>
+      </div>
+    </div>
+
+    <div id="mode-gift">
     <div class="card">
       <label>店舗</label>
       <select id="store"></select>
@@ -180,6 +214,7 @@
       <div id="day-totals" style="margin:8px 0 14px"></div>
       <div class="top"><b style="font-size:.95rem">この店舗の最近の記録</b></div>
       <ul class="list" id="recent"></ul>
+    </div>
     </div>
   </div>
 </div>
@@ -899,6 +934,179 @@ $('btn-batch-save').addEventListener('click', () => {
     el('div', { className: 'msg warn', textContent: `本当に記録しますか?  ${$('store').value} / ${rows.length}枚 / 想定金額の合計 ¥${total.toLocaleString()}` }),
     yes, no);
 });
+
+/* ============ 優待券(写真と券番号を保存。AIでは読み取らない) ============ */
+const Y_RE = /^KH[0-9]{2}-[0-9]{1,8}$/;      // 優待券の番号:KH26-数字(26は年)
+// 全角・ハイフンの種類をそろえ、KH26123 のようにハイフンが無くても KH26-123 にする
+function normalizeYutai(s) {
+  let v = (s || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[\s　]/g, '').replace(/[ー－―−‐-]/g, '-').toUpperCase();
+  const m = v.match(/^KH([0-9]{2})-?([0-9]*)$/);
+  return m ? (m[2] ? `KH${m[1]}-${m[2]}` : (v.includes('-') ? `KH${m[1]}-` : v)) : v;
+}
+let yRows = [];
+let yBusy = false;
+function setMode(m) {
+  const y = m === 'yutai';
+  $('mode-gift').classList.toggle('hidden', y);
+  $('mode-yutai').classList.toggle('hidden', !y);
+  $('tab-gift').className = y ? 'sec' : 'rec';
+  $('tab-yutai').className = y ? 'rec' : 'sec';
+  safeSet('scan_mode', m);
+  if (y) { ySyncStores(); loadYutaiTotals(); }
+}
+function ySyncStores() {
+  const src = $('store');
+  if (!$('y-store').options.length || $('y-store').options.length !== src.options.length) {
+    $('y-store').replaceChildren(...[...src.options].map(o => el('option', { value: o.value, textContent: o.textContent })));
+  }
+  $('y-store').value = src.value;
+  $('y-store').disabled = src.disabled;
+  if (!$('y-date').value) { $('y-date').value = todayJST(); $('y-date').max = todayJST(); }
+}
+function yRowReady(r) { return Y_RE.test(r.ticket) && !!r.date && !r.dup && !r.done && !r.prior; }
+function yRefresh() {
+  const seen = new Map();
+  yRows.forEach(r => { r.dup = false; if (r.ticket) seen.set(r.ticket, (seen.get(r.ticket) || 0) + 1); });
+  yRows.forEach(r => { if (r.ticket && seen.get(r.ticket) > 1) r.dup = true; });
+  yRows.forEach(r => {
+    let kind = 'ok', text = '✓ 記録できます';
+    if (r.done) { kind = 'ok'; text = '✓ 記録しました'; }
+    else if (r.err) { kind = 'ng'; text = r.err; }
+    else if (!r.ticket) { kind = 'warn'; text = '写真を見て、券番号を入力してください。'; }
+    else if (!Y_RE.test(r.ticket)) { kind = 'ng'; text = '券番号は、「KH26-数字」の形で入力してください(26は年)。'; }
+    else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
+    else if (r.dup) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります。'; }
+    else if (!r.date) { kind = 'warn'; text = '日付を入れてください。'; }
+    r.e.st.className = 'st ' + kind; r.e.st.textContent = text;
+  });
+  const n = yRows.filter(yRowReady).length;
+  $('y-save').disabled = yBusy || n === 0;
+  $('y-save').textContent = n ? `${n}枚を記録する` : '記録できる優待券がありません';
+}
+function yMakeRow(file) {
+  const url = URL.createObjectURL(file);
+  const img = el('img', { src: url, alt: '優待券' });
+  img.addEventListener('click', () => img.classList.toggle('big'));
+  const tin = el('input', { type: 'text', className: 'bt', placeholder: 'KH26-123', autocomplete: 'off', autocapitalize: 'characters', maxLength: 24 });
+  const din = el('input', { type: 'date', value: $('y-date').value, max: todayJST() });
+  const st = el('div', { className: 'st warn' });
+  const rm = el('button', { type: 'button', className: 'rm', textContent: 'この写真を一覧から外す' });
+  const box = el('div', { className: 'brow' }, [img, el('label', { textContent: '券番号' }), tin, el('label', { textContent: '日付' }), din, st, rm]);
+  const r = { file, ticket: '', date: din.value, box, e: { tin, din, st }, url };
+  let tmr = null;
+  tin.addEventListener('input', () => {
+    const v = normalizeYutai(tin.value); if (tin.value !== v) tin.value = v;
+    r.ticket = v; r.err = ''; r.prior = null; yRefresh();
+    clearTimeout(tmr);
+    if (Y_RE.test(v)) tmr = setTimeout(async () => {      // すでに記録されていないかを、先に確認する
+      const { data } = await sb.from('yutai_usage_log').select('store_name,used_date').eq('ticket_number', v).limit(1);
+      if (r.ticket !== v) return;
+      r.prior = (data && data[0]) ? `${data[0].used_date} に ${data[0].store_name} で記録済み` : null;
+      yRefresh();
+    }, 400);
+  });
+  din.addEventListener('change', () => { r.date = din.value; yRefresh(); });
+  rm.addEventListener('click', () => { yRows = yRows.filter(x => x !== r); box.remove(); try { URL.revokeObjectURL(url); } catch (e) {} yRefresh(); });
+  return r;
+}
+function yAddFiles(filesIn) {
+  const files = [...filesIn].filter(f => /^image\//.test(f.type || '') || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ''));
+  if (!files.length) { showMsg($('y-msg'), 'warn', '写真(画像)のファイルを選んでください。'); return; }
+  const room = 60 - yRows.length;
+  const take = files.slice(0, Math.max(0, room));
+  if (files.length > take.length) showMsg($('y-msg'), 'warn', `一覧には60枚までです。${take.length}枚だけ追加しました。`);
+  else $('y-msg').replaceChildren();
+  take.forEach(f => { const r = yMakeRow(f); yRows.push(r); $('y-list').append(r.box); });
+  yRefresh();
+}
+async function yUploadPhoto(file, usedDate, ticket) {
+  let blob = null, ctype = 'image/jpeg', ext = 'jpg';
+  try { const c = await toCanvas(file, 1400); blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.8)); } catch (e) {}
+  if (!blob) { blob = file; ctype = file.type || 'image/jpeg'; ext = (ctype.split('/')[1] || 'jpg').replace('jpeg', 'jpg'); }
+  let lastErr = '';
+  for (let k = 0; k < 2; k++) {
+    const path = `yutai/${String(usedDate).slice(0, 7)}/${ticket}_${Date.now()}.${ext}`;
+    try {
+      const { error } = await sb.storage.from('ticket-photos').upload(path, blob, { contentType: ctype });
+      if (!error) return { path, err: '' };
+      lastErr = (error.message || String(error)).slice(0, 120);
+    } catch (e) { lastErr = String(e && e.message || e).slice(0, 120); }
+  }
+  return { path: null, err: lastErr || '原因不明' };
+}
+async function loadYutaiTotals() {
+  const box = $('y-totals'), ul = $('y-recent');
+  if (!box) return;
+  const store = $('y-store').value;
+  const from = new Date(Date.now() + 9 * 3600 * 1000 - 14 * 86400000).toISOString().slice(0, 10);
+  const { data, error } = await sb.from('yutai_usage_log').select('used_date').eq('store_name', store).gte('used_date', from).order('used_date', { ascending: false }).limit(1000);
+  if (error) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '読み込めませんでした' })); }
+  else if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '直近14日の記録は、まだありません。' })); }
+  else {
+    const g = new Map();
+    data.forEach(r => { const d = String(r.used_date).slice(0, 10); g.set(d, (g.get(d) || 0) + 1); });
+    const sel = $('y-date').value;
+    box.replaceChildren(...[...g.entries()].map(([d, n]) => el('div', { style: `display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;${d === sel ? 'background:rgba(59,130,246,.18);' : ''}border-bottom:1px solid var(--line)` }, [
+      el('span', { textContent: d + (d === sel ? '(選択中)' : '') }), el('span', { style: 'font-weight:700', textContent: `${n}枚` })])));
+  }
+  const r2 = await sb.from('yutai_usage_log').select('ticket_number,used_date').eq('store_name', store).order('created_at', { ascending: false }).limit(15);
+  if (r2.error) ul.replaceChildren(el('li', { textContent: '読み込めませんでした' }));
+  else if (!r2.data.length) ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' }));
+  else ul.replaceChildren(...r2.data.map(r => el('li', {}, [el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })])])));
+}
+$('tab-gift').addEventListener('click', () => setMode('gift'));
+$('tab-yutai').addEventListener('click', () => setMode('yutai'));
+$('y-store').addEventListener('change', () => { $('store').value = $('y-store').value; safeSet('scan_store', $('y-store').value); loadYutaiTotals(); loadRecent(); });
+$('y-date').addEventListener('change', () => { yRows.forEach(r => { if (!r.done) { r.date = $('y-date').value; r.e.din.value = r.date; } }); yRefresh(); loadYutaiTotals(); });
+$('y-cam').addEventListener('click', () => $('y-cam-file').click());
+$('y-pick').addEventListener('click', () => $('y-pick-file').click());
+$('y-cam-file').addEventListener('change', (ev) => { const fl = [...ev.target.files]; ev.target.value = ''; if (fl.length) yAddFiles(fl); });
+$('y-pick-file').addEventListener('change', (ev) => { const fl = [...ev.target.files]; ev.target.value = ''; if (fl.length) yAddFiles(fl); });
+['dragenter', 'dragover'].forEach(t => $('mode-yutai').addEventListener(t, (e) => { e.preventDefault(); $('y-drop').style.borderColor = 'var(--accent)'; }));
+['dragleave', 'drop'].forEach(t => $('mode-yutai').addEventListener(t, (e) => { e.preventDefault(); $('y-drop').style.borderColor = ''; }));
+$('mode-yutai').addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) yAddFiles(e.dataTransfer.files); });
+$('y-save').addEventListener('click', () => {
+  const rows = yRows.filter(yRowReady);
+  if (!rows.length) return;
+  const store = $('y-store').value;
+  const yes = el('button', { type: 'button', className: 'rec', textContent: 'はい、記録する' });
+  const no = el('button', { type: 'button', className: 'sec', style: 'margin-top:8px;width:100%', textContent: 'やめる' });
+  no.addEventListener('click', () => $('y-confirm').replaceChildren());
+  yes.addEventListener('click', async () => {
+    $('y-confirm').replaceChildren();
+    yBusy = true; yRefresh();
+    const by = session && session.user ? session.user.email : null;
+    let ok = 0;
+    for (const r of rows) {
+      r.e.st.className = 'st warn'; r.e.st.textContent = '保存中...';
+      const up = await yUploadPhoto(r.file, r.date, r.ticket);
+      if (!up.path) { r.err = '写真の保存に失敗しました(' + up.err + ')。もう一度、記録を押してください。'; continue; }
+      const { error } = await sb.from('yutai_usage_log').insert({
+        ticket_number: r.ticket, store_name: store, used_date: r.date, course: '優待券',
+        input_method: '写真', photo_path: up.path, created_by: by
+      });
+      if (error) {
+        r.err = (error.code === '23505' || /duplicate/i.test(error.message || '')) ? '⚠ この番号は、すでに記録されています(重複のため記録しません)。' : '記録できませんでした(' + (error.message || '').slice(0, 80) + ')';
+        continue;
+      }
+      r.done = true; ok++;
+      r.e.tin.disabled = true; r.e.din.disabled = true;
+    }
+    yBusy = false; yRefresh();
+    const ng = rows.length - ok;
+    showMsg($('y-msg'), ng ? 'warn' : 'ok', ng ? `${ok}枚を記録しました。${ng}枚は記録できていません(一覧の表示を確認してください)。` : `✓ ${ok}枚を記録しました。`);
+    // 記録できた分は、一覧から外す
+    yRows.filter(r => r.done).forEach(r => { r.box.remove(); try { URL.revokeObjectURL(r.url); } catch (e) {} });
+    yRows = yRows.filter(r => !r.done);
+    yRefresh(); loadYutaiTotals();
+  });
+  $('y-confirm').replaceChildren(
+    el('div', { className: 'msg warn', textContent: `本当に記録しますか?  優待券 / ${store} / ${rows.length}枚` }), yes, no);
+});
+// ログイン後、前回のモードに戻す
+const _setupApp = setupApp;
+setupApp = async function () { await _setupApp(); if (safeGet('scan_mode') === 'yutai') setMode('yutai'); };
 
 init();
 </script>
