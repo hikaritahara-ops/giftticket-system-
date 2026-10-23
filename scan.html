@@ -54,6 +54,15 @@
   details.manual summary { cursor:pointer; padding:6px 0; }
   details.manual input { margin-top:8px; }
   .hidden { display:none !important; }
+  /* 優待券モード:白を基調にして、ギフトチケットの画面と見分けやすくする */
+  body.yutai { --bg:#f4f6fb; --card:#ffffff; --line:#d3dae8; --text:#1f2937; --sub:#566074; --accent:#0f766e; color-scheme:light; }
+  body.yutai input, body.yutai select { background:#ffffff; color:#1f2937; }
+  body.yutai button.sec { background:#e4e9f3; color:#1f2937; }
+  body.yutai .brow { background:#f8fafc; }
+  body.yutai .brow img { background:#e5e7eb; }
+  body.yutai .brow .st.ok { color:#15803d; } body.yutai .brow .st.warn { color:#b45309; } body.yutai .brow .st.ng { color:#b91c1c; }
+  body.yutai .msg.ok { background:rgba(34,197,94,.12); } body.yutai .msg.warn { background:rgba(245,158,11,.14); } body.yutai .msg.ng { background:rgba(239,68,68,.1); }
+  body.yutai #y-drop { background:#f8fafc; }
   /* iPad など、画面が大きい端末では、広く・大きく表示する */
   @media (min-width:700px) {
     body { padding-left:32px; padding-right:32px; }
@@ -118,8 +127,8 @@
     </div>
 
     <div id="mode-yutai" class="hidden">
-      <div class="card">
-        <b style="font-size:1rem">🎁 優待券を、撮影して保存する</b>
+      <div class="card" style="border-top:5px solid var(--accent)">
+        <b style="font-size:1rem">🎁 優待券モード:撮影して保存する</b>
         <div class="tip">優待券は、金額の確認はしません。写真と券番号を保存して、店舗・日付ごとの枚数を、会計(POS)と合わせます。</div>
         <label>店舗</label>
         <select id="y-store"></select>
@@ -952,6 +961,7 @@ function setMode(m) {
   $('mode-yutai').classList.toggle('hidden', !y);
   $('tab-gift').className = y ? 'sec' : 'rec';
   $('tab-yutai').className = y ? 'rec' : 'sec';
+  document.body.classList.toggle('yutai', y);
   safeSet('scan_mode', m);
   if (y) { ySyncStores(); loadYutaiTotals(); }
 }
