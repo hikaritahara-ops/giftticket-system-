@@ -1905,7 +1905,7 @@ async function rematchAllPending() {
 
 /* ==================== ページ2: POS取り込み ==================== */
 let posParsedRows = [];
-let posExistingKeys = new Set();
+let posExistingKeys = new Map();   // キー → すでに入っている件数(同じ内容の会計が同日に複数あっても、件数で数える)
 let posAllSavedRows = [];
 let matchedPosKeys = new Map();
 
@@ -1986,26 +1986,37 @@ function parsePosCsv(text) {
   loadPosExistingAndPreview();
 }
 
-function posMakeKey(r) { return `${r.store_name}|${r.sale_date}|${r.sales_amount}|${r.customer_name}`; }
+// ファイルの各行に、重複(すでに同じ件数が入っている)かどうかの印を付ける。同じ内容の行が複数あっても、既存の件数ぶんだけを重複とする
+function markPosDup() {
+  const used = new Map();
+  posParsedRows.forEach(r => {
+    const k = posMakeKey(r), u = used.get(k) || 0;
+    r._dup = u < (posExistingKeys.get(k) || 0);
+    used.set(k, u + 1);
+  });
+}
+function posMakeKey(r) { return `${r.store_name}|${r.card_type || ''}|${r.sale_date}|${r.sales_amount}|${r.customer_name || ''}`; }
 
 async function loadPosExistingAndPreview() {
   if (!SUPABASE_URL || !SUPABASE_KEY) { alert('Supabaseの接続設定を入力してください'); return; }
   document.getElementById('pos-preview-card').style.display = 'block';
   document.getElementById('pos-preview-tbody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3)">既存データと照合中...</td></tr>';
   try {
-    const existing = await fetchAllPosSales(['store_name','sale_date','sales_amount','customer_name']);
-    posExistingKeys = new Set(existing.map(posMakeKey));
+    const existing = await fetchAllPosSales(['store_name','card_type','sale_date','sales_amount','customer_name']);
+    posExistingKeys = new Map();
+    existing.forEach(x => { const k = posMakeKey(x); posExistingKeys.set(k, (posExistingKeys.get(k) || 0) + 1); });
   } catch (e) {
     alert('既存データの取得に失敗しました: ' + e.message);
-    posExistingKeys = new Set();
+    posExistingKeys = new Map();
   }
   renderPosPreview();
 }
 
 function renderPosPreview() {
+  markPosDup();
   let dupCount = 0;
   const rowsHtml = posParsedRows.map(r => {
-    const isDup = posExistingKeys.has(posMakeKey(r));
+    const isDup = !!r._dup;
     if (isDup) dupCount++;
     return `
       <tr class="${isDup ? 'dup' : ''}">
@@ -2026,7 +2037,8 @@ function renderPosPreview() {
 }
 
 document.getElementById('pos-upsert-btn').addEventListener('click', async () => {
-  const newRows = posParsedRows.filter(r => !posExistingKeys.has(posMakeKey(r)));
+  markPosDup();
+  const newRows = posParsedRows.filter(r => !r._dup).map(r => { const { _dup, ...o } = r; return o; });
   if (newRows.length === 0) return;
   const upsertBtn = document.getElementById('pos-upsert-btn');
   upsertBtn.disabled = true;
@@ -2101,7 +2113,7 @@ async function autoRematchAfterPosImport(progressText, logBox) {
 }
 
 document.getElementById('pos-reset-btn').addEventListener('click', () => {
-  posParsedRows = []; posExistingKeys = new Set();
+  posParsedRows = []; posExistingKeys = new Map();
   document.getElementById('pos-preview-card').style.display = 'none';
   document.getElementById('pos-filename').textContent = '';
   posFileInput.value = '';
@@ -2115,7 +2127,7 @@ async function fetchAllPosSales(selectCols) {
   const cols = selectCols ? selectCols.join(',') : '*';
   let all = []; let from = 0; const pageSize = 1000;
   while (true) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?select=${cols}&order=sale_date.desc`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?select=${cols}&order=sale_date.desc,id.desc`, {
       headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + pageSize - 1}` })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
