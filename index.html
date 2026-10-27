@@ -1731,7 +1731,7 @@ function renderTable() {
         ${filtered.map(r => `
           <tr>
             <td><span class="badge ${getBadgeClass(r.judgment)}">${r.judgment || '—'}</span></td>
-            <td class="mono">${r.ticket_number || '—'}<div style="color:var(--text3);font-size:0.68em;font-weight:400">読込 ${rowReadMonth(r) === 'none' ? '不明' : rowReadMonth(r)}</div></td>
+            <td class="mono" onclick="showDetail('${r.ticket_number}')" title="クリックで詳細を開く" style="cursor:pointer"><span style="color:var(--accent);text-decoration:underline;text-underline-offset:3px">${isUnread(r) ? '(読取不能)' : (r.ticket_number || '—')}</span><div style="color:var(--text3);font-size:0.68em;font-weight:400">読込 ${rowReadMonth(r) === 'none' ? '不明' : rowReadMonth(r)}</div></td>
             <td><span style="color:var(--text2)">${r.course_type || '—'}</span></td>
             <td>${r.store_name || '—'}</td>
             <td>${soldCell(r)}</td>
