@@ -2405,7 +2405,7 @@ async function loadPosStoreView() {
   const body = document.getElementById('pos-store-view-body');
   hint.textContent = '読み込み中...'; body.innerHTML = '';
   try {
-    posAllSavedRows = await fetchAllPosSales(['store_name','sale_date','sales_amount','customer_name']);
+    posAllSavedRows = await fetchAllPosSales(['store_name','card_type','sale_date','sales_amount','customer_name']);
     await loadMatchedPosKeys();
     hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、ギフチケ照合ですでにこのお会計データと一致が確認できている行です。`;
     populatePosMonthFilter();
@@ -2447,9 +2447,11 @@ function renderPosStoreView() {
   const byStore = {};
   filtered.forEach(r => {
     const name = r.store_name || '(店舗名不明)';
-    if (!byStore[name]) byStore[name] = { rows: [], total: 0 };
+    if (!byStore[name]) byStore[name] = { rows: [], total: 0, tk: 0, tkN: 0, yt: 0, ytN: 0 };
     byStore[name].rows.push(r);
     byStore[name].total += (r.sales_amount || 0);
+    if (r.card_type === '株主KeyHolder請求') { byStore[name].yt += (r.sales_amount || 0); byStore[name].ytN++; }
+    else if (r.card_type === 'ﾁｹｯﾄ') { byStore[name].tk += (r.sales_amount || 0); byStore[name].tkN++; }
   });
   const storeNames = Object.keys(byStore).sort((a, b) => byStore[b].rows.length - byStore[a].rows.length);
   const html = `<div class="store-list">
@@ -2462,6 +2464,8 @@ function renderPosStoreView() {
             <div class="store-name"><span class="arrow">▶</span>${name}</div>
             <div class="store-summary">
               <span>件数: <span class="num">${info.rows.length.toLocaleString()}</span></span>
+              <span title="ギフトチケット(ﾁｹｯﾄ)の売上">チケット: <span class="num">¥${info.tk.toLocaleString()}</span>(${info.tkN}件)</span>
+              <span title="株主優待券(株主KeyHolder請求)">優待券: <span class="num">¥${info.yt.toLocaleString()}</span>(${info.ytN}件)</span>
               <span>合計: <span class="num">¥${info.total.toLocaleString()}</span></span>
             </div>
           </div>
