@@ -1269,8 +1269,15 @@ function openStoreEdit(id) {
   openStoreModal(`<h3 style="margin:0 0 12px;font-size:1rem">記録の修正:<span style="font-family:monospace">${escH(l.ticket_number)}</span>(${escH(l.store_name)})</h3>
     <label style="font-size:.78rem;color:var(--text3)">利用日</label><input id="se-date" type="date" value="${escH(String(l.used_date || '').slice(0, 10))}" style="${inp}">
     <label style="font-size:.78rem;color:var(--text3)">想定金額(円)</label><input id="se-amt" type="number" value="${l.expected_amount != null ? Number(l.expected_amount) : ''}" style="${inp}">
-    <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input id="se-staff" type="checkbox" ${l.staff_discount ? 'checked' : ''}> スタッフ割(20%引き)</label>
+    <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input id="se-staff" type="checkbox" ${l.staff_discount ? 'checked' : ''} onchange="syncStaffAmount('${escH(l.ticket_number)}')"> スタッフ割(20%引き)<span style="color:var(--text3);font-size:.78rem">(チェックを変えると、金額も自動で変わります)</span></label>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-small" onclick="closeStoreModal()">やめる</button><button class="btn-small" style="border-color:var(--accent);color:var(--accent)" onclick="saveStoreEdit(${Number(l.id)})">保存する</button></div>`);
+}
+// スタッフ割のチェックを切り替えたら、想定金額も自動で、額面(スタッフ割は80%)に合わせる(Nの券は、60分/90分で金額が違うので、そのまま)
+function syncStaffAmount(ticket) {
+  const h = String(ticket || '')[0], face = STORE_FACE[h];
+  if (!face || h === 'N') return;
+  const staff = document.getElementById('se-staff').checked;
+  document.getElementById('se-amt').value = staff ? Math.round(face * 0.8) : face;
 }
 async function saveStoreEdit(id) {
   const r = storeRows.find(x => Number(x.log.id) === Number(id));
@@ -1815,7 +1822,19 @@ function showDetail(ticketNumber) {
       </select>
     </div>
     <div class="detail-item"><label>対応状況</label><span>${r.status||'—'}</span></div>
-    <div class="detail-item"><label>券番号</label><span class="mono">${r.ticket_number||'—'}</span></div>
+    ${isUnread(r) ? `
+    <div class="detail-item" style="grid-column:1/-1;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:10px">
+      <label style="color:#c2410c;font-weight:700">⚠ 券番号が読み取れていません。画像(下の「📎 画像を開く」)を見て、券番号を入力してください</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
+        <input type="text" class="edit-input" id="edit-new-ticket" placeholder="例: A0041701" maxlength="8" style="max-width:180px;font-family:monospace;text-transform:uppercase">
+        <select class="edit-input" id="edit-new-face" style="max-width:260px">
+          <option value="">額面は券番号の頭文字で自動(A/B/C/P)</option>
+          <option value="5040">N券 60分(5,040円)</option>
+          <option value="7560">N券 90分(7,560円)</option>
+        </select>
+      </div>
+      <div style="font-size:.75rem;color:#9a3412;margin-top:4px">入力して保存すると、券番号・額面・コース・発券データを反映し、POSと自動で再照合します。券番号は「A」「B」「C」「P」「N」+数字7桁です。</div>
+    </div>` : `<div class="detail-item"><label>券番号</label><span class="mono">${r.ticket_number||'—'}</span></div>`}
     <div class="detail-item"><label>コース種別</label><span>${r.course_type||'—'}</span></div>
     <div class="detail-item"><label>店舗名</label><span>${r.store_name||'—'}</span></div>
     <div class="detail-item" style="grid-column:1/-1"><label>販売情報(販売データより)</label><span>${(() => { const s = soldMap.get(r.ticket_number); if (soldMap.size === 0) return '販売データ未取り込み'; if (!s) return '⚠ 販売データにこの券番号がありません'; return `販売日 ${s.sale_date||'不明'} / 経路 ${s.sale_channel||'—'} / 販売金額 ¥${(s.sale_amount||0).toLocaleString()} / ${s.usage_status||'未使用'}`; })()}</span></div>
@@ -1842,10 +1861,40 @@ function showDetail(ticketNumber) {
   document.getElementById('modal').classList.add('open');
 }
 
+const TICKET_COURSE = { A: ['A(60min)', 15840], B: ['B(100min)', 26400], C: ['C(120min)', 31680], P: ['P(ペントハウス2.5h)', 90000], N: ['N(マグマルーム90分)', null] };
+function isUnread(r) { return !!r && (String(r.ticket_number || '').startsWith('UNREAD-') || (r.judgment === '読取不能' && !/^[ABCPN][0-9]{7}$/.test(r.ticket_number || ''))); }
+
+// 読み取り不能の券に、目視で確認した券番号を入れる
+async function saveUnreadTicketNo(r, fields) {
+  const raw = (document.getElementById('edit-new-ticket').value || '').toUpperCase().replace(/[\s\-－]/g, '');
+  if (!/^[ABCPN][0-9]{7}$/.test(raw)) { showToast('券番号は「A」「B」「C」「P」「N」+数字7桁で入力してください(例: A0041701)', 'error'); return false; }
+  if (allData.some(d => d.ticket_number === raw)) { showToast(`${raw} はすでに登録されています。同じ券の二重登録でないか確認してください`, 'error'); return false; }
+  const kind = raw[0], face = Number(document.getElementById('edit-new-face').value) || TICKET_COURSE[kind][1];
+  if (!face) { showToast('N券は、額面(60分・90分)を選んでください', 'error'); return false; }
+  const body = Object.assign({}, fields, { ticket_number: raw, face_value: face, course_type: TICKET_COURSE[kind][0] });
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
+    method: 'PATCH', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }), body: JSON.stringify(body)
+  });
+  if (!res.ok) { showToast('保存に失敗しました(券番号の重複の可能性)', 'error'); return false; }
+  // 新しい券番号で、POS・発券データと自動で再照合
+  const updated = Object.assign({}, r, body);
+  try { await rematchBatch([updated], allData); } catch (e) {}
+  return raw;
+}
+
 async function saveManualEdit() {
   const ticketNumber = document.getElementById('modal').dataset.ticketNumber;
   const r = allData.find(d => d.ticket_number === ticketNumber);
   if (!r) return;
+  if (isUnread(r) && document.getElementById('edit-new-ticket') && document.getElementById('edit-new-ticket').value.trim()) {
+    const nm = document.getElementById('edit-customer-name').value.trim();
+    const ud = document.getElementById('edit-used-date').value || null;
+    const ex = document.getElementById('edit-expiry-date').value || null;
+    if (!confirm(`この券の券番号を「${document.getElementById('edit-new-ticket').value.trim().toUpperCase()}」として保存し、POSと再照合します。よろしいですか?`)) return;
+    const done = await saveUnreadTicketNo(r, { customer_name: nm, used_date: ud || r.used_date, used_date_confirmed: ud, expiry_date: ex, pos_match_status: '' });
+    if (done) { showToast(`券番号 ${done} を保存し、再照合しました`, 'success'); closeModal(); loadData(); }
+    return;
+  }
 
   const newJudgment = document.getElementById('edit-judgment').value;
   const newCustomerName = document.getElementById('edit-customer-name').value.trim();
@@ -2006,94 +2055,114 @@ function findPosMatchesForRecord(r, posRows) {
   return { posMatches, matchSource };
 }
 
-async function rematchTicket(r) {
-  const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-  // Sマークがあれば額面の80%、なければ額面そのものを「あるべき金額」として検索する
-  const expectedAmount = r.has_s_mark ? Math.round(r.face_value * 0.8) : r.face_value;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/pos_sales?store_name=eq.${encodeURIComponent(posStoreName)}&sales_amount=eq.${expectedAmount}&select=sale_date,customer_name,imported_at,sales_amount`, {
-    headers: sbHeaders()
-  });
-  const posRows = res.ok ? await res.json() : [];
-  const { posMatches, matchSource } = findPosMatchesForRecord(r, posRows);
-
-  let confirmedUsedDate = null;
-  let posMatchStatus = '';
-  const wasManual = r.pos_match_status === '手動確認' && r.used_date_confirmed;
-
-  if (posMatches.length === 1) {
-    confirmedUsedDate = posMatches[0].sale_date;
-    posMatchStatus = '一致';
-  } else if (posMatches.length > 1) {
-    confirmedUsedDate = posMatches[0].sale_date;
-    posMatchStatus = '複数候補';
-  } else if (wasManual) {
-    // POSと一致しなかったが、手動で確定させた内容は消さずそのまま残す
-    confirmedUsedDate = r.used_date_confirmed;
-    posMatchStatus = '手動確認';
-  } else {
-    posMatchStatus = '売上データなし';
-  }
-
-  let isExpired = null;
-  if (confirmedUsedDate && r.expiry_date) {
-    const e = new Date(r.expiry_date), u = new Date(confirmedUsedDate);
-    if (!isNaN(e.getTime()) && !isNaN(u.getTime())) isExpired = u.getTime() > e.getTime();
-  }
-
-  const issued = await fetchIssuedTicket(r.ticket_number);
-  const isIssued = !!issued;
-
-  // 実際に一致したPOSレコードの金額(見つからなければ0)
-  const actualSalesAmount = posMatches.length > 0 ? (posMatches[0].sales_amount || 0) : 0;
-  const amountDiff = actualSalesAmount - expectedAmount;
-
-  let judgment, judgmentReason;
-  if (!r.ticket_number) { judgment = '読取不能'; judgmentReason = '券番号が読み取れませんでした'; }
-  else if (isExpired === true) { judgment = '期限切れ使用'; judgmentReason = `有効期限(${r.expiry_date})を過ぎて使用されています(確定日: ${confirmedUsedDate})`; }
-  else if (!isIssued) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
-  else if (posMatchStatus === '売上データなし') { judgment = '要確認'; judgmentReason = '発券データとは一致していますが、お会計データに一致する記録が見つかりません'; }
-  else if (posMatchStatus === '複数候補') { judgment = '要確認'; judgmentReason = `発券データとは一致していますが、お会計データに複数の候補があります(${matchSource})`; }
-  else if (posMatchStatus === '手動確認') { judgment = '正規の券'; judgmentReason = '手動修正(正規の券)'; }
-  else { judgment = '正規の券'; judgmentReason = `発券データ・お会計データと一致(${matchSource})`; }
-
-  const updateBody = {
-    used_date_confirmed: confirmedUsedDate,
-    is_expired: isExpired,
-    pos_match_status: posMatchStatus,
-    judgment: judgment,
-    judgment_reason: judgmentReason,
-    issued_date: isIssued ? issued.issued_date : null,
-    issued_destination: isIssued ? issued.destination : null,
-    sales_amount: actualSalesAmount,
-    amount_diff: amountDiff
+// ---- 再照合(お客様名は使いません):店舗・利用日・金額が合うお会計を探す ----
+// 1枚の会計は、1枚の券にだけ結びつける(同じ日に同じ金額の券が2枚あれば、会計も2件必要)
+async function rematchBatch(targets, allRows) {
+  const posOf = (r) => STORE_POS_MAPPING[r.store_name] || r.store_name;
+  const mdOf = (r) => { const d = r.used_date_confirmed || r.used_date || ''; const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[2]}-${m[3]}` : ''; };
+  const amountsOf = (r) => {
+    if (!r.face_value) return [];
+    const full = Number(r.face_value), disc = Math.round(full * 0.8);
+    return r.has_s_mark ? [disc, full] : [full, disc];
   };
-
-  const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
-    method: 'PATCH',
-    headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }),
-    body: JSON.stringify(updateBody)
-  });
-  return { ok: patchRes.ok, judgment };
+  const stores = [...new Set(targets.map(posOf).filter(Boolean))];
+  if (!stores.length) return { ok: 0, changed: 0 };
+  const inList = stores.map(n => '"' + n + '"').join(',');
+  const pos = await fetchPaged(`pos_sales?select=id,store_name,sale_date,sales_amount&card_type=eq.${encodeURIComponent('ﾁｹｯﾄ')}&sales_amount=gt.0&store_name=in.(${encodeURIComponent(inList)})&order=id.asc`);
+  const lastPos = {};
+  pos.forEach(p => { if (!lastPos[p.store_name] || p.sale_date > lastPos[p.store_name]) lastPos[p.store_name] = p.sale_date; });
+  const pool = new Map();
+  pos.forEach(p => { const k = `${p.store_name}|${String(p.sale_date).slice(5, 10)}|${Number(p.sales_amount)}`; if (!pool.has(k)) pool.set(k, []); pool.get(k).push(p); });
+  const take = (r) => {
+    const st = posOf(r), md = mdOf(r);
+    if (!md) return null;
+    for (const amt of amountsOf(r)) {
+      const arr = pool.get(`${st}|${md}|${amt}`);
+      if (arr && arr.length) return { row: arr.shift(), amt };
+    }
+    return null;
+  };
+  // すでに「一致」している券が、先に自分の会計を使う(要確認の券に取られないように)
+  const tset = new Set(targets.map(t => t.ticket_number));
+  (allRows || []).filter(r => !r.archived && !tset.has(r.ticket_number) && r.judgment !== '要確認' && r.store_name && r.face_value).forEach(r => take(r));
+  let ok = 0, changed = 0;
+  const sorted = targets.slice().sort((x, y) => String(x.used_date_confirmed || x.used_date || '').localeCompare(String(y.used_date_confirmed || y.used_date || '')));
+  for (const r of sorted) {
+    try {
+      const before = r.judgment;
+      const wasManual = r.pos_match_status === '手動確認' && r.used_date_confirmed;
+      const st = posOf(r);
+      const m = take(r);
+      let confirmedUsedDate = null, posMatchStatus = '', actual = 0, whyNo = '';
+      if (m) { confirmedUsedDate = String(m.row.sale_date).slice(0, 10); posMatchStatus = '一致'; actual = m.amt; }
+      else if (wasManual) { confirmedUsedDate = r.used_date_confirmed; posMatchStatus = '手動確認'; }
+      else {
+        posMatchStatus = '売上データなし';
+        const md = mdOf(r);
+        if (!md) whyNo = '利用日が読み取れていないため、お会計と照合できません';
+        else if (!r.face_value) whyNo = '券の金額が決まらないため、お会計と照合できません';
+        else {
+          const dt = String(r.used_date_confirmed || r.used_date).slice(0, 10);
+          const hint = [];
+          amountsOf(r).forEach(amt => { (pool.get(`${st}|${md}|${amt}`) || []); });
+          // 同じ店舗・同じ金額で、まだ結びついていない会計の日付(候補)
+          const cand = [];
+          pool.forEach((arr, k) => { const [ps, , amt] = k.split('|'); if (ps === st && amountsOf(r).includes(Number(amt))) arr.forEach(x => cand.push(String(x.sale_date).slice(5, 10))); });
+          const sameDay = [];
+          pool.forEach((arr, k) => { const [ps, kmd, amt] = k.split('|'); if (ps === st && kmd === md) arr.forEach(() => sameDay.push(Number(amt).toLocaleString() + '円')); });
+          if (lastPos[st] && dt > lastPos[st]) whyNo = `お会計データが、まだ ${lastPos[st]} までしか入っていません`;
+          else {
+            const amtTxt = amountsOf(r).map(a => a.toLocaleString() + '円').join('または');
+            whyNo = `${st} の ${md} に、${amtTxt}のお会計がありません`;
+            if (sameDay.length) whyNo += `(その日の他のチケット売上: ${sameDay.join('、')})`;
+            if (cand.length) whyNo += `。同じ金額で未結合の会計の日付: ${[...new Set(cand)].slice(0, 5).join('、')}`;
+          }
+        }
+      }
+      let isExpired = null;
+      if (confirmedUsedDate && r.expiry_date) {
+        const e = new Date(r.expiry_date), u = new Date(confirmedUsedDate);
+        if (!isNaN(e.getTime()) && !isNaN(u.getTime())) isExpired = u.getTime() > e.getTime();
+      }
+      const issued = await fetchIssuedTicket(r.ticket_number);
+      const isIssued = !!issued;
+      const expectedAmount = r.has_s_mark ? Math.round((r.face_value || 0) * 0.8) : (r.face_value || 0);
+      const amountDiff = posMatchStatus === '一致' ? actual - expectedAmount : (0 - expectedAmount);
+      let judgment, judgmentReason;
+      if (!r.ticket_number) { judgment = '読取不能'; judgmentReason = '券番号が読み取れませんでした'; }
+      else if (isExpired === true) { judgment = '期限切れ使用'; judgmentReason = `有効期限(${r.expiry_date})を過ぎて使用されています(確定日: ${confirmedUsedDate})`; }
+      else if (!isIssued) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
+      else if (posMatchStatus === '売上データなし') { judgment = '要確認'; judgmentReason = whyNo; }
+      else if (posMatchStatus === '手動確認') { judgment = '正規の券'; judgmentReason = '手動修正(正規の券)'; }
+      else if (amountDiff !== 0) { judgment = '正規の券'; judgmentReason = r.has_s_mark ? '発券データ・お会計と一致(Sマークがありますが、定価の金額で一致。確認してください)' : '発券データ・お会計と一致(スタッフ割の金額で一致。Sマークの読み取りを確認してください)'; }
+      else { judgment = '正規の券'; judgmentReason = '発券データ・お会計と一致(店舗・利用日・金額)'; }
+      const body = {
+        used_date_confirmed: confirmedUsedDate, is_expired: isExpired, pos_match_status: posMatchStatus,
+        judgment, judgment_reason: judgmentReason,
+        issued_date: isIssued ? issued.issued_date : null, issued_destination: isIssued ? issued.destination : null,
+        sales_amount: actual, amount_diff: amountDiff
+      };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
+        method: 'PATCH', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }), body: JSON.stringify(body)
+      });
+      if (res.ok) { ok++; if (judgment !== before) changed++; }
+    } catch (e) { /* この券はスキップして続行 */ }
+  }
+  return { ok, changed };
 }
+async function rematchTicket(r) { const out = await rematchBatch([r], allData); return { ok: out.ok > 0, judgment: null }; }
 
 async function rematchAllPending() {
   const targets = allData.filter(r => !r.archived && r.judgment === '要確認');
   if (targets.length === 0) { showToast('再照合対象(要確認)の券がありません', 'error'); return; }
   const btn = document.getElementById('rematch-btn');
-  btn.disabled = true;
-  let success = 0, changed = 0;
-  for (let i = 0; i < targets.length; i++) {
-    const r = targets[i];
-    btn.textContent = `🔁 再照合中... (${i+1}/${targets.length})`;
-    try {
-      const before = r.judgment;
-      const result = await rematchTicket(r);
-      if (result.ok) { success++; if (result.judgment !== before) changed++; }
-    } catch(e) { /* この券はスキップして続行 */ }
-  }
+  btn.disabled = true; btn.textContent = `🔁 再照合中... (${targets.length}件)`;
+  let out = { ok: 0, changed: 0 };
+  try { out = await rematchBatch(targets, allData); }
+  catch (e) { showToast('再照合でエラー: ' + e.message, 'error'); }
   btn.disabled = false;
   btn.textContent = '🔁 POSデータで再照合';
-  showToast(`再照合完了: ${success}件処理(判定が変わったのは${changed}件)`, 'success');
+  showToast(`再照合完了: ${out.ok}件処理(判定が変わったのは${out.changed}件)`, 'success');
   loadData();
 }
 
@@ -2291,15 +2360,9 @@ async function autoRematchAfterPosImport(progressText, logBox) {
     progressText.textContent = '取り込み完了(再照合の対象なし)';
     return;
   }
-  let success = 0, changed = 0;
-  for (let i = 0; i < targets.length; i++) {
-    progressText.textContent = `自動再照合中... (${i + 1}/${targets.length})`;
-    try {
-      const before = targets[i].judgment;
-      const result = await rematchTicket(targets[i]);
-      if (result.ok) { success++; if (result.judgment !== before) changed++; }
-    } catch (e) { /* この券はスキップして続行 */ }
-  }
+  progressText.textContent = `自動再照合中... (${targets.length}件)`;
+  const outR = await rematchBatch(targets, rows);
+  const success = outR.ok, changed = outR.changed;
   logBox.innerHTML += `<div class="ok-line">✓ 自動再照合: ${targets.length}件中${success}件を処理(判定が変わったのは${changed}件)</div>`;
   progressText.textContent = `取り込み完了 + 自動再照合完了(判定が変わったのは${changed}件)`;
   logBox.scrollTop = logBox.scrollHeight;
