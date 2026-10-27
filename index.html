@@ -2087,12 +2087,46 @@ async function rematchBatch(targets, allRows) {
   (allRows || []).filter(r => !r.archived && !tset.has(r.ticket_number) && r.judgment !== '要確認' && r.store_name && r.face_value).forEach(r => take(r));
   let ok = 0, changed = 0;
   const sorted = targets.slice().sort((x, y) => String(x.used_date_confirmed || x.used_date || '').localeCompare(String(y.used_date_confirmed || y.used_date || '')));
+  // 1回目: 1枚の券 = POSの1会計(店舗・利用日・金額)
+  const found = new Map();
+  sorted.forEach(r => { found.set(r.ticket_number, take(r)); });
+  // 2回目: 残った券を、POSの「2つに分かれた会計」「1つにまとまった会計」と結びつける
+  const rest = sorted.filter(r => !found.get(r.ticket_number) && mdOf(r) && r.face_value && r.ticket_number);
+  rest.forEach(r => { // 分割: 90,000円の券 = POSの45,000円×2
+    const st = posOf(r), md = mdOf(r);
+    for (const amt of amountsOf(r)) {
+      const arr = pool.get(`${st}|${md}|${amt / 2}`);
+      if (Number.isInteger(amt / 2) && arr && arr.length >= 2) {
+        const a = arr.shift(), b = arr.shift();
+        found.set(r.ticket_number, { row: a, amt, note: `POSでは ${(amt / 2).toLocaleString()}円×2 に分かれて登録されています` });
+        return;
+      }
+    }
+  });
+  const rest2 = rest.filter(r => !found.get(r.ticket_number));
+  rest2.forEach((r, i) => { // 合算: 同じ日の2枚の券 = POSの1会計
+    if (found.get(r.ticket_number)) return;
+    const st = posOf(r), md = mdOf(r);
+    for (let j = i + 1; j < rest2.length; j++) {
+      const q = rest2[j];
+      if (found.get(q.ticket_number) || posOf(q) !== st || mdOf(q) !== md) continue;
+      for (const a1 of amountsOf(r)) for (const a2 of amountsOf(q)) {
+        const arr = pool.get(`${st}|${md}|${a1 + a2}`);
+        if (arr && arr.length) {
+          const row = arr.shift();
+          found.set(r.ticket_number, { row, amt: a1, note: `POSでは ${q.ticket_number} と合わせて1会計(${(a1 + a2).toLocaleString()}円)で登録されています` });
+          found.set(q.ticket_number, { row, amt: a2, note: `POSでは ${r.ticket_number} と合わせて1会計(${(a1 + a2).toLocaleString()}円)で登録されています` });
+          return;
+        }
+      }
+    }
+  });
   for (const r of sorted) {
     try {
       const before = r.judgment;
       const wasManual = r.pos_match_status === '手動確認' && r.used_date_confirmed;
       const st = posOf(r);
-      const m = take(r);
+      const m = found.get(r.ticket_number);
       let confirmedUsedDate = null, posMatchStatus = '', actual = 0, whyNo = '';
       if (m) { confirmedUsedDate = String(m.row.sale_date).slice(0, 10); posMatchStatus = '一致'; actual = m.amt; }
       else if (wasManual) { confirmedUsedDate = r.used_date_confirmed; posMatchStatus = '手動確認'; }
@@ -2136,6 +2170,7 @@ async function rematchBatch(targets, allRows) {
       else if (posMatchStatus === '手動確認') { judgment = '正規の券'; judgmentReason = '手動修正(正規の券)'; }
       else if (amountDiff !== 0) { judgment = '正規の券'; judgmentReason = r.has_s_mark ? '発券データ・お会計と一致(Sマークがありますが、定価の金額で一致。確認してください)' : '発券データ・お会計と一致(スタッフ割の金額で一致。Sマークの読み取りを確認してください)'; }
       else { judgment = '正規の券'; judgmentReason = '発券データ・お会計と一致(店舗・利用日・金額)'; }
+      if (m && m.note && judgment === '正規の券' && !(amountDiff !== 0)) judgmentReason = '発券データ・お会計と一致(' + m.note + ')';
       const body = {
         used_date_confirmed: confirmedUsedDate, is_expired: isExpired, pos_match_status: posMatchStatus,
         judgment, judgment_reason: judgmentReason,
