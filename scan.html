@@ -192,6 +192,13 @@
           <option value="7560">90分(¥7,560)</option>
         </select>
       </div>
+      <div id="p-wrap" class="hidden" style="margin:8px 0">
+        <label>アルファベットのない番号です。プラチナムペントの券の可能性があります</label>
+        <select id="p-course" style="width:100%;padding:12px;font-size:16px;border-radius:10px">
+          <option value="">選んでください</option>
+          <option value="194000">プラチナムペント 4時間コース【2名様用】(¥194,000)</option>
+        </select>
+      </div>
       <div id="expect-area"></div>
       <label class="chk" id="staff-wrap"><input type="checkbox" id="staff-disc"><span>スタッフ割(20%引き)の券</span></label>
       <div id="ocr-area"></div>
@@ -256,7 +263,10 @@ const STORES = [
 ];
 const PRICE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
 const COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
-const TICKET_RE = /^[ABCPN][0-9]{7}$/;
+const TICKET_RE = /^([ABCPN][0-9]{7}|[1-9][0-9]?)$/;   // A/B/C/P/N+数字7桁、または アルファベットなしの 1〜99(プラチナムペントの券)
+const isNumOnly = (t) => /^[1-9][0-9]?$/.test(t || '');
+const PLAT_LABEL = 'プラチナムペント 4時間コース【2名様用】(¥194,000)';
+const PLAT_AMOUNT = 194000;
 
 const $ = id => document.getElementById(id);
 let session = null;
@@ -355,6 +365,7 @@ function expectedAmount() {
   const t = normalizeTicket($('ticket').value);
   let face = TICKET_RE.test(t) ? PRICE[t[0]] : null;
   if (t[0] === 'N') face = Number($('n-course').value) || null;   // マグマルームは60分/90分を選ぶ
+  if (isNumOnly(t)) face = Number($('p-course').value) || null;   // アルファベットなしは、プラチナムペントを選ぶ
   if (!face) return null;
   return $('staff-disc').checked ? Math.round(face * 0.8) : face;
 }
@@ -362,10 +373,14 @@ function updateExpect() {
   const isN = normalizeTicket($('ticket').value)[0] === 'N' && TICKET_RE.test(normalizeTicket($('ticket').value));
   $('n-wrap').classList.toggle('hidden', !isN);
   if (!isN) $('n-course').value = '';
+  const isP = isNumOnly(normalizeTicket($('ticket').value));
+  $('p-wrap').classList.toggle('hidden', !isP);
+  if (!isP) $('p-course').value = '';
   const amt = expectedAmount();
   const box = $('expect-area');
   if (amt == null) {
     if (isN) box.replaceChildren(el('div', { className: 'msg warn', textContent: 'マグマルームの券です。60分か90分かを選ぶと、想定金額が出ます。' }));
+    else if (isP) box.replaceChildren(el('div', { className: 'msg warn', textContent: 'プラチナムペントの券なら、上で選ぶと、想定金額が出ます。' }));
     else box.replaceChildren();
     return;
   }
@@ -376,7 +391,7 @@ function updateExpect() {
 function updateButton() {
   updateExpect();
   const v = $('ticket').value;
-  const nOk = v[0] !== 'N' || !!$('n-course').value;
+  const nOk = (v[0] !== 'N' || !!$('n-course').value) && (!isNumOnly(v) || !!$('p-course').value);
   const ok = !!(nOk && TICKET_RE.test(v) && $('store').value && $('used-date').value && checked && checked.ready);
   $('btn-record').disabled = !ok;
   $('btn-record-next').disabled = !ok;
@@ -397,7 +412,9 @@ async function runCheck() {
   const nodes = [];
   const head = t[0];
   const issued = issuedR.data && issuedR.data[0];
-  if (issued) {
+  if (isNumOnly(t)) {
+    nodes.push(el('div', { className: 'msg ok', textContent: 'アルファベットのない番号です。プラチナムペントの券なら、上で選んでください(発券データとは照合しません)。' }));
+  } else if (issued) {
     nodes.push(el('div', { className: 'msg ok', textContent:
       `✓ 発券済みの券です:${COURSE[head] || issued.course || head}(額面 ${head === 'N' ? '¥5,040(60分)または ¥7,560(90分)' : '¥' + (PRICE[head] || 0).toLocaleString()})` +
       (issued.destination ? ` / 発券先:${issued.destination}` : '') }));
@@ -408,7 +425,7 @@ async function runCheck() {
   (logR.data || []).forEach(r => dups.push(`${r.used_date}に${r.store_name}で記録済み`));
   const m = matchR.data && matchR.data[0];
   if (m) dups.push(`写真の読み取り結果に、${m.used_date_confirmed || m.used_date || '日付不明'}・${m.store_name || ''}で登録済み`);
-  let needConfirm = !issued;
+  let needConfirm = !issued && !isNumOnly(t);
   if (dups.length) {
     needConfirm = true;
     nodes.push(el('div', { className: 'msg ng', textContent: '⚠ この券は、すでに使われた記録があります:' + dups.join(' / ') }));
@@ -433,6 +450,7 @@ function buildRow() {
   if (!checked.issued) notes.push('発券データなし');
   if (checked.dup) notes.push('重複の確認済み');
   if (t[0] === 'N') notes.push($('n-course').value === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
+  if (isNumOnly(t)) notes.push('プラチナムペント 4時間(2名様用)');
   return {
     ticket_number: t, store_name: $('store').value, used_date: $('used-date').value,
     input_method: inputMethod, note: notes.join(' / ') || null,
@@ -444,7 +462,7 @@ function buildRow() {
 function resetForNext() {
   currentPhoto = null;
   $('ticket').value = ''; checked = null; inputMethod = '手入力';
-  $('staff-disc').checked = false; $('n-course').value = ''; $('confirm-box').replaceChildren();
+  $('staff-disc').checked = false; $('n-course').value = ''; $('p-course').value = ''; $('confirm-box').replaceChildren();
   $('big-no').textContent = '— — — — — — — —';
   $('ocr-area').replaceChildren();
   $('check-area').replaceChildren();
@@ -544,6 +562,7 @@ function askConfirm(mode) {
 $('btn-record-next').addEventListener('click', () => askConfirm('next'));
 $('btn-record').addEventListener('click', () => askConfirm('only'));
 $('n-course').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateButton(); });
+$('p-course').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateButton(); });
 $('staff-disc').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateExpect(); });
 
 /* 最近の記録 */
@@ -770,9 +789,9 @@ async function exifDateOf(file) {
   return '';
 }
 function jstDateOf(ms) { return new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 10); }
-function amountFor(t, ncourse, staff) {
+function amountFor(t, ncourse, staff, pcourse) {
   if (!TICKET_RE.test(t)) return null;
-  const f = t[0] === 'N' ? (Number(ncourse) || null) : PRICE[t[0]];
+  const f = isNumOnly(t) ? (Number(pcourse) || null) : (t[0] === 'N' ? (Number(ncourse) || null) : PRICE[t[0]]);
   if (!f) return null;
   return staff ? Math.round(f * 0.8) : f;
 }
@@ -806,29 +825,31 @@ async function checkTicketBatch(r) {      // 発券データにあるか・す�
     sb.from('usage_log').select('store_name,used_date').eq('ticket_number', t).order('used_date', { ascending: false }).limit(1)
   ]);
   if (r.ticket !== t) return;
-  r.issued = !!(iss.data && iss.data.length);
+  r.issued = isNumOnly(t) ? true : !!(iss.data && iss.data.length);
   r.prior = (log.data && log.data[0]) ? `${log.data[0].used_date} に ${log.data[0].store_name} で記録済み` : null;
   refreshAll();
 }
 function rowReady(r) {
   return TICKET_RE.test(r.ticket) && !!r.date && r.dateOk && !r.prior && !r.dupInList &&
-    (r.ticket[0] !== 'N' || !!r.ncourse) && !!$('store').value && !r.busy;
+    (r.ticket[0] !== 'N' || !!r.ncourse) && (!isNumOnly(r.ticket) || !!r.pcourse) && !!$('store').value && !r.busy;
 }
 function refreshRow(r) {
   const e = r.e;
   const isN = r.ticket[0] === 'N' && TICKET_RE.test(r.ticket);
   e.nwrap.classList.toggle('hidden', !isN);
+  e.pwrap.classList.toggle('hidden', !isNumOnly(r.ticket));
   let kind = 'ok', text = '';
   if (r.busy) { kind = 'warn'; text = r.progress || '読み取り中...'; }
   else if (r.upErr) { kind = 'ng'; text = '写真の保存に失敗しました(' + r.upErr + ')。もう一度、「記録する」を押してください。'; }
   else if (!TICKET_RE.test(r.ticket)) { kind = 'ng'; text = '番号が読み取れていません。写真を見て、番号を入力してください。'; }
   else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
   else if (r.dupInList) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります(重複のため、記録できません)'; }
+  else if (isNumOnly(r.ticket) && !r.pcourse) { kind = 'warn'; text = 'アルファベットのない番号です。プラチナムペントの券なら、下で選んでください。'; }
   else if (isN && !r.ncourse) { kind = 'warn'; text = 'マグマルームです。60分か90分かを選んでください。'; }
   else if (!r.date) { kind = 'warn'; text = '利用日を入れてください。(今日の日付の写真は、パソコンに保存した日の可能性があるため、空にしています。上の「全部の利用日を、この日にする」も使えます)'; }
   else if (!r.dateOk) { kind = 'warn'; text = '利用日を、写真と見比べて、「日付OK」にチェックしてください。(最初の日付は、写真の日付を仮に入れています)'; }
   else {
-    const amt = amountFor(r.ticket, r.ncourse, r.staff);
+    const amt = amountFor(r.ticket, r.ncourse, r.staff, r.pcourse);
     kind = r.issued === false ? 'warn' : 'ok';
     text = (r.issued === false ? '⚠ 発券データに無い番号です(N券は、現在データがありません)。 ' : '✓ ') + (amt != null ? `想定金額 ¥${amt.toLocaleString()}` + (r.staff ? '(スタッフ割)' : '') : '');
   }
@@ -858,7 +879,7 @@ function makeRow(file) {
   const st = el('div', { className: 'st warn' });
   const tin = el('input', { className: 'bt', type: 'text', value: '', placeholder: 'A0042165', maxLength: 12, autocapitalize: 'characters' });
   tin.setAttribute('inputmode', 'latin');
-  tin.addEventListener('input', () => { r.ticket = normalizeTicket(tin.value); r.method = '手入力'; r.issued = null; r.prior = null; if (!TICKET_RE.test(r.ticket)) r.ncourse = ''; refreshAll(); if (TICKET_RE.test(r.ticket)) checkTicketBatch(r); });
+  tin.addEventListener('input', () => { r.ticket = normalizeTicket(tin.value); r.method = '手入力'; r.issued = null; r.prior = null; if (!TICKET_RE.test(r.ticket)) r.ncourse = ''; if (!isNumOnly(r.ticket)) { r.pcourse = ''; r.e.psel.value = ''; } refreshAll(); if (TICKET_RE.test(r.ticket)) checkTicketBatch(r); });
   const nsel = el('select', {}, [
     el('option', { value: '', textContent: 'マグマルームの時間を選ぶ' }),
     el('option', { value: '5040', textContent: '60分(¥5,040)' }),
@@ -866,6 +887,12 @@ function makeRow(file) {
   ]);
   nsel.addEventListener('change', () => { r.ncourse = nsel.value; refreshAll(); });
   const nwrap = el('div', { className: 'hidden', style: 'margin-top:8px' }, [nsel]);
+  const psel = el('select', {}, [
+    el('option', { value: '', textContent: 'プラチナムペントの券の可能性(選んでください)' }),
+    el('option', { value: String(PLAT_AMOUNT), textContent: PLAT_LABEL })
+  ]);
+  psel.addEventListener('change', () => { r.pcourse = psel.value; refreshAll(); });
+  const pwrap = el('div', { className: 'hidden', style: 'margin-top:8px' }, [psel]);
   const din = el('input', { type: 'date', value: r.date });
   din.addEventListener('change', () => { r.date = din.value; r.dateOk = !!din.value; dok.checked = r.dateOk; refreshAll(); });
   const dok = el('input', { type: 'checkbox' });
@@ -874,10 +901,10 @@ function makeRow(file) {
   staff.addEventListener('change', () => { r.staff = staff.checked; refreshAll(); });
   const rm = el('button', { className: 'rm', type: 'button', textContent: 'この写真を外す' });
   rm.addEventListener('click', () => { const k = batch.indexOf(r); if (k >= 0) batch.splice(k, 1); URL.revokeObjectURL(r.url); r.box.remove(); refreshAll(); });
-  r.e = { st, tin, nwrap, nsel, din, dok, staff };
+  r.e = { st, tin, nwrap, nsel, pwrap, psel, din, dok, staff };
   r.box = el('div', { className: 'brow' }, [
     img, st,
-    tin, nwrap,
+    tin, nwrap, pwrap,
     el('label', { textContent: '利用日(券に書かれた日付を見て、直してください)', style: 'margin-top:10px' }), din,
     el('label', { className: 'chk2' }, [dok, el('span', { textContent: '日付OK(写真と見比べました)' })]),
     el('label', { className: 'chk2' }, [staff, el('span', { textContent: 'スタッフ割(20%引き)の券' })]),
@@ -936,7 +963,7 @@ $('btn-bulk-date').addEventListener('click', () => {
 $('btn-batch-save').addEventListener('click', () => {
   const rows = batch.filter(rowReady);
   if (!rows.length) return;
-  const total = rows.reduce((s, r) => s + (amountFor(r.ticket, r.ncourse, r.staff) || 0), 0);
+  const total = rows.reduce((s, r) => s + (amountFor(r.ticket, r.ncourse, r.staff, r.pcourse) || 0), 0);
   const yes = el('button', { className: 'rec', textContent: `はい、${rows.length}枚を記録する`, style: 'margin-top:10px' });
   const no = el('button', { className: 'sec', textContent: 'やめる(直す)', style: 'width:100%;margin-top:8px' });
   no.addEventListener('click', () => $('batch-confirm').replaceChildren());
@@ -953,9 +980,10 @@ $('btn-batch-save').addEventListener('click', () => {
       const notes = [];
       if (r.issued === false) notes.push('発券データなし');
       if (r.ticket[0] === 'N') notes.push(r.ncourse === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
+      if (isNumOnly(r.ticket)) notes.push('プラチナムペント 4時間(2名様用)');
       notes.push('まとめて記録');
       payload.push({ photo_path: photoPath, ticket_number: r.ticket, store_name: $('store').value, used_date: r.date, input_method: r.method, note: notes.join(' / '),
-               staff_discount: r.staff, expected_amount: amountFor(r.ticket, r.ncourse, r.staff),
+               staff_discount: r.staff, expected_amount: amountFor(r.ticket, r.ncourse, r.staff, r.pcourse),
                created_by: session && session.user ? session.user.email : null });
     }
     const okRows = rows.filter(r => !r.upErr);
