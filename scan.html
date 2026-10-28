@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="ギフチケ記録">
-<title>ギフチケ 利用記録</title>
+<meta name="apple-mobile-web-app-title" content="チケットカメラ">
+<title>チケットカメラ</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
@@ -65,7 +65,7 @@
   body.yutai #y-drop { background:#f8fafc; }
   /* iPad など、画面が大きい端末では、広く・大きく表示する */
   @media (min-width:700px) {
-    body { padding-left:32px; padding-right:32px; }
+    body { padding-left:max(32px, env(safe-area-inset-left)); padding-right:max(32px, env(safe-area-inset-right)); }
     .wrap { max-width:760px; }
     h1 { font-size:1.5rem; margin-top:28px; }
     .sub { font-size:.95rem; }
@@ -80,6 +80,18 @@
     .list li { font-size:1.05rem; padding:14px 0; }
     .msg { font-size:1rem; }
   }
+  /* iPhone など、幅が狭い端末:横並びのボタンは折り返し、画面からはみ出さない */
+  body { padding-left:max(16px, env(safe-area-inset-left)); padding-right:max(16px, env(safe-area-inset-right)); padding-bottom:max(40px, env(safe-area-inset-bottom)); }
+  html { -webkit-text-size-adjust:100%; }
+  input[type=date] { min-height:50px; -webkit-appearance:none; appearance:none; min-width:0; }
+  @media (max-width:520px) {
+    .row { flex-wrap:wrap; }
+    .row .fix { flex:1 1 100%; white-space:normal; }
+    button { white-space:normal; line-height:1.35; }
+    .list li { flex-wrap:wrap; }
+    #tab-gift, #tab-yutai { font-size:.92rem; padding:14px 6px; white-space:nowrap; }
+  }
+  @media (pointer:coarse) { .del, .brow .rm { min-height:44px; } }
   .top { display:flex; justify-content:space-between; align-items:center; }
   .top a, .top button.link { background:none; color:var(--sub); font-size:.8rem; padding:4px 0; font-weight:400; text-decoration:underline; }
   .chk { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:.88rem; }
@@ -100,7 +112,7 @@
 
   <!-- ログイン -->
   <div id="login" class="hidden">
-    <h1>ギフチケ 利用記録</h1>
+    <h1>📷 チケットカメラ</h1>
     <div class="sub">店舗用ログイン</div>
     <div class="card">
       <label>ID(管理部は、メールアドレス)</label>
@@ -115,7 +127,7 @@
   <!-- 記録画面 -->
   <div id="app" class="hidden">
     <div class="top">
-      <h1>ギフチケ 利用記録</h1>
+      <h1>📷 チケットカメラ</h1>
       <button class="link" id="btn-logout">ログアウト</button>
     </div>
     <div class="sub">券を使ったら、券番号を入力して「記録する」を押してください。</div>
