@@ -466,6 +466,43 @@
   .store-detail { display: none; border-top: 1px solid var(--border); }
   .store-row.open .store-detail { display: block; }
   .empty-state { text-align: center; padding: 2rem; color: var(--text3); font-size: 0.82rem; }
+
+  /* ===== iPad・iPhone など、画面が小さい端末向けの調整 ===== */
+  html { -webkit-text-size-adjust: 100%; }
+  body { overflow-x: hidden; }
+  @media (max-width: 900px) {
+    header { padding: 0 1rem; height: auto; min-height: 56px; gap: 8px; flex-wrap: wrap; padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 6px; }
+    .header-right { gap: .5rem; flex-wrap: wrap; }
+    .main-nav { padding: 0 .5rem; top: 0; position: static; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; scrollbar-width: none; }
+    .main-nav::-webkit-scrollbar { display: none; }
+    .main-nav-tab { flex: 0 0 auto; padding: 12px 14px; }
+    .container { padding: 1rem; }
+    .config-grid { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .6rem; }
+    .filters { padding: .8rem 1rem; gap: .6rem; }
+    .filters .search-input, .filter-right .search-input { width: auto !important; flex: 1 1 140px; min-width: 0; }
+    .filter-right { margin-left: 0; width: 100%; flex-wrap: wrap; }
+    .filter-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; width: 100%; padding-bottom: 4px; }
+    .tab { flex: 0 0 auto; }
+    #table-body, .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .store-row-head { flex-wrap: wrap; gap: 6px; }
+    .store-summary { flex-wrap: wrap; gap: .4rem 1rem; }
+    .modal { width: 94%; padding: 1.2rem; max-height: 88vh; }
+    .filter-field { min-width: 110px; }
+  }
+  @media (max-width: 600px) {
+    .detail-grid { grid-template-columns: 1fr; }
+    .logo { font-size: .9rem; }
+    .user-email { display: none; }
+    .stat-card { padding: .8rem; }
+    .modal-overlay { align-items: flex-end; }
+    .modal { width: 100%; border-radius: 14px 14px 0 0; }
+    input, select, textarea, .edit-input, .search-input { font-size: 16px !important; } /* iPhoneで入力時に画面が拡大されるのを防ぐ */
+  }
+  @media (pointer: coarse) {
+    .btn-small, .btn-archive, .btn-restore, .status-select, .tab, .btn-config, .btn-logout { min-height: 38px; }
+    .tab { padding: 8px 14px; }
+  }
 </style>
 </head>
 <body>
@@ -1038,7 +1075,7 @@ async function loadStoreView() {
 let storePosLeft = [];      // 結びつかなかった会計(券の金額のもの)
 let storePosAll = [];       // 取り込んだお会計(利用日の範囲内)
 let storePosLast = {};      // 店舗ごとの、お会計データがある最後の日
-const STORE_TICKET_AMOUNTS = new Set([15840, 12672, 26400, 21120, 31680, 25344, 90000, 72000, 5040, 4032, 7560, 6048]);
+const STORE_TICKET_AMOUNTS = new Set([194000, 155200, 15840, 12672, 26400, 21120, 31680, 25344, 90000, 72000, 5040, 4032, 7560, 6048]);
 // チケット払いの会計(0円は除く)。1行に複数枚の分が合算されていたり、1枚が2行に分かれていることもある
 function isTicketPos(p) { return p.card_type === 'ﾁｹｯﾄ' && Number(p.sales_amount) > 0; }
 function posCandidates(l) {
@@ -1135,7 +1172,10 @@ function storeFilteredRows() {
   return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
 }
 const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
+for (let i = 0; i < 10; i++) STORE_COURSE[String(i)] = 'プラチナムペント 4時間(2名様用)';
 const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
+// 4時間コース(2名様用・194,000円)は、アルファベットなしの数字(1〜99)だけの券番号
+for (let i = 0; i < 10; i++) STORE_FACE[String(i)] = 194000;
 function exportStoreExcel() {
   const rows = storeFilteredRows();
   if (!rows.length) { showToast('出力する記録がありません', 'error'); return; }
@@ -1826,14 +1866,21 @@ function showDetail(ticketNumber) {
     <div class="detail-item" style="grid-column:1/-1;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:10px">
       <label style="color:#c2410c;font-weight:700">⚠ 券番号が読み取れていません。画像(下の「📎 画像を開く」)を見て、券番号を入力してください</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
-        <input type="text" class="edit-input" id="edit-new-ticket" placeholder="例: A0041701" maxlength="8" style="max-width:180px;font-family:monospace;text-transform:uppercase">
+        <input type="text" class="edit-input" id="edit-new-ticket" placeholder="例: A0041701(数字だけの券は 12)" maxlength="8" style="max-width:200px;font-family:monospace;text-transform:uppercase" oninput="togglePlatSelect()">
         <select class="edit-input" id="edit-new-face" style="max-width:260px">
           <option value="">額面は券番号の頭文字で自動(A/B/C/P)</option>
           <option value="5040">N券 60分(5,040円)</option>
           <option value="7560">N券 90分(7,560円)</option>
         </select>
       </div>
-      <div style="font-size:.75rem;color:#9a3412;margin-top:4px">入力して保存すると、券番号・額面・コース・発券データを反映し、POSと自動で再照合します。券番号は「A」「B」「C」「P」「N」+数字7桁です。</div>
+      <div id="edit-plat-wrap" style="display:none;margin-top:8px;padding:8px;background:#ffedd5;border-radius:6px">
+        <label style="color:#9a3412;font-weight:700;font-size:.78rem">アルファベットのない番号です。プラチナムペントの券の可能性があります。当てはまるときは、選んでください</label>
+        <select class="edit-input" id="edit-plat" style="margin-top:4px">
+          <option value="">選んでください</option>
+          <option value="194000">プラチナムペント 4時間コース【2名様用】(¥194,000)</option>
+        </select>
+      </div>
+      <div style="font-size:.75rem;color:#9a3412;margin-top:4px">入力して保存すると、券番号・額面・コース・発券データを反映し、POSと自動で再照合します。券番号は「A」「B」「C」「P」「N」+数字7桁です。プラチナムペントの4時間コース【2名様用】は、アルファベットなしの数字(1〜99)だけを入力し、出てくる選択欄で選んでください。</div>
     </div>` : `<div class="detail-item"><label>券番号</label><span class="mono">${r.ticket_number||'—'}</span></div>`}
     <div class="detail-item"><label>コース種別</label><span>${r.course_type||'—'}</span></div>
     <div class="detail-item"><label>店舗名</label><span>${r.store_name||'—'}</span></div>
@@ -1861,15 +1908,25 @@ function showDetail(ticketNumber) {
   document.getElementById('modal').classList.add('open');
 }
 
-const TICKET_COURSE = { A: ['A(60min)', 15840], B: ['B(100min)', 26400], C: ['C(120min)', 31680], P: ['P(ペントハウス2.5h)', 90000], N: ['N(マグマルーム90分)', null] };
-function isUnread(r) { return !!r && (String(r.ticket_number || '').startsWith('UNREAD-') || (r.judgment === '読取不能' && !/^[ABCPN][0-9]{7}$/.test(r.ticket_number || ''))); }
+const TICKET_COURSE = { A: ['A(60min)', 15840], B: ['B(100min)', 26400], C: ['C(120min)', 31680], P: ['P(ペントハウス2.5h)', 90000], N: ['N(マグマルーム90分)', null], D: ['プラチナムペント 4時間(2名様用)', 194000] };
+// 4時間コース(2名様用)は、アルファベットなしの 1〜99 の数字だけ
+const isNumOnlyTicket = (t) => /^[0-9]{1,2}$/.test(String(t || ''));
+function isUnread(r) { return !!r && (String(r.ticket_number || '').startsWith('UNREAD-') || (r.judgment === '読取不能' && !/^[ABCPN][0-9]{7}$/.test(r.ticket_number || '') && !isNumOnlyTicket(r.ticket_number))); }
 
+function togglePlatSelect() {
+  const v = (document.getElementById('edit-new-ticket').value || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim();
+  const w = document.getElementById('edit-plat-wrap');
+  if (w) w.style.display = /^[0-9]{1,2}$/.test(v) ? 'block' : 'none';
+}
 // 読み取り不能の券に、目視で確認した券番号を入れる
 async function saveUnreadTicketNo(r, fields) {
-  const raw = (document.getElementById('edit-new-ticket').value || '').toUpperCase().replace(/[\s\-－]/g, '');
-  if (!/^[ABCPN][0-9]{7}$/.test(raw)) { showToast('券番号は「A」「B」「C」「P」「N」+数字7桁で入力してください(例: A0041701)', 'error'); return false; }
+  let raw = (document.getElementById('edit-new-ticket').value || '').toUpperCase().replace(/[\s\-－]/g, '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  if (/^[0-9]{1,2}$/.test(raw)) raw = String(parseInt(raw, 10)); // 4時間コース(2名様用):アルファベットなしの数字
+  if (!/^[ABCPN][0-9]{7}$/.test(raw) && !(/^[0-9]{1,2}$/.test(raw) && raw !== '0')) { showToast('券番号は「A」「B」「C」「P」「N」+数字7桁、または4時間コースの数字(1〜99)で入力してください', 'error'); return false; }
   if (allData.some(d => d.ticket_number === raw)) { showToast(`${raw} はすでに登録されています。同じ券の二重登録でないか確認してください`, 'error'); return false; }
-  const kind = raw[0], face = Number(document.getElementById('edit-new-face').value) || TICKET_COURSE[kind][1];
+  const kind = isNumOnlyTicket(raw) ? 'D' : raw[0];
+  if (kind === 'D' && document.getElementById('edit-plat').value !== '194000') { showToast('アルファベットのない番号は、プラチナムペントの券かどうかを、選んでください', 'error'); return false; }
+  const face = Number(document.getElementById('edit-new-face').value) || TICKET_COURSE[kind][1];
   if (!face) { showToast('N券は、額面(60分・90分)を選んでください', 'error'); return false; }
   const body = Object.assign({}, fields, { ticket_number: raw, face_value: face, course_type: TICKET_COURSE[kind][0] });
   const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?ticket_number=eq.${encodeURIComponent(r.ticket_number)}`, {
@@ -2165,7 +2222,7 @@ async function rematchBatch(targets, allRows) {
       let judgment, judgmentReason;
       if (!r.ticket_number) { judgment = '読取不能'; judgmentReason = '券番号が読み取れませんでした'; }
       else if (isExpired === true) { judgment = '期限切れ使用'; judgmentReason = `有効期限(${r.expiry_date})を過ぎて使用されています(確定日: ${confirmedUsedDate})`; }
-      else if (!isIssued) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
+      else if (!isIssued && !isNumOnlyTicket(r.ticket_number)) { judgment = '要確認'; judgmentReason = '発券データに無い券番号'; }
       else if (posMatchStatus === '売上データなし') { judgment = '要確認'; judgmentReason = whyNo; }
       else if (posMatchStatus === '手動確認') { judgment = '正規の券'; judgmentReason = '手動修正(正規の券)'; }
       else if (amountDiff !== 0) { judgment = '正規の券'; judgmentReason = r.has_s_mark ? '発券データ・お会計と一致(Sマークがありますが、定価の金額で一致。確認してください)' : '発券データ・お会計と一致(スタッフ割の金額で一致。Sマークの読み取りを確認してください)'; }
@@ -2498,10 +2555,8 @@ function renderPosStoreView() {
           <div class="store-row-head" onclick="togglePosStoreRow(${idx})">
             <div class="store-name"><span class="arrow">▶</span>${name}</div>
             <div class="store-summary">
-              <span>件数: <span class="num">${info.rows.length.toLocaleString()}</span></span>
               <span title="ギフトチケット(ﾁｹｯﾄ)の売上">チケット: <span class="num">¥${info.tk.toLocaleString()}</span>(${info.tkN}件)</span>
               <span title="株主優待券(株主KeyHolder請求)">優待券: <span class="num">¥${info.yt.toLocaleString()}</span>(${info.ytN}件)</span>
-              <span>合計: <span class="num">¥${info.total.toLocaleString()}</span></span>
             </div>
           </div>
           <div class="store-detail">
