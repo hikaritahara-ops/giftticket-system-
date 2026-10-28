@@ -92,6 +92,9 @@
     #tab-gift, #tab-yutai { font-size:.92rem; padding:14px 6px; white-space:nowrap; }
   }
   @media (pointer:coarse) { .del, .brow .rm { min-height:44px; } }
+  .yline { display:flex; align-items:center; gap:8px; }
+  .yline .ypre { font-family:ui-monospace,Menlo,monospace; font-weight:700; font-size:1.2rem; white-space:nowrap; }
+  .yline input { flex:1; min-width:0; }
   .top { display:flex; justify-content:space-between; align-items:center; }
   .top a, .top button.link { background:none; color:var(--sub); font-size:.8rem; padding:4px 0; font-weight:400; text-decoration:underline; }
   .chk { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:.88rem; }
@@ -738,6 +741,34 @@ function extractCandidates(text) {
    利用日は手書きで読みにくいので、人が写真を見て確認する。最初の日付は、写真の日付を仮に入れる。 */
 const batch = [];          // 1枚ごとの状態
 let batchBusy = false;
+
+/* 写真の「撮影日」を、写真の中のEXIF情報から読む(読めないときは空)。JPEGのみ。 */
+async function exifDateOf(file) {
+  try {
+    const buf = await file.slice(0, 262144).arrayBuffer();
+    const v = new DataView(buf);
+    if (v.byteLength < 12 || v.getUint16(0) !== 0xFFD8) return '';
+    let off = 2;
+    while (off + 4 < v.byteLength) {
+      const mk = v.getUint16(off), len = v.getUint16(off + 2);
+      if (mk === 0xFFE1 && v.getUint32(off + 4) === 0x45786966) {
+        const t = off + 10, le = v.getUint16(t) === 0x4949;
+        const g16 = (o) => v.getUint16(o, le), g32 = (o) => v.getUint32(o, le);
+        const readIfd = (p) => { const n = g16(p), out = {}; for (let i = 0; i < n; i++) { const e = p + 2 + i * 12; out[g16(e)] = { cnt: g32(e + 4), val: e + 8 }; } return out; };
+        const str = (en) => { const o = en.cnt > 4 ? t + g32(en.val) : en.val; let r = ''; for (let k = 0; k < en.cnt - 1; k++) r += String.fromCharCode(v.getUint8(o + k)); return r; };
+        const i0 = readIfd(t + g32(t + 4));
+        let dt = '';
+        if (i0[0x8769]) { const ie = readIfd(t + g32(i0[0x8769].val)); if (ie[0x9003]) dt = str(ie[0x9003]); else if (ie[0x9004]) dt = str(ie[0x9004]); }
+        if (!dt && i0[0x132]) dt = str(i0[0x132]);
+        const m = dt.match(/^(\d{4}):(\d{2}):(\d{2})/);
+        return m && m[1] > '2000' ? `${m[1]}-${m[2]}-${m[3]}` : '';
+      }
+      if ((mk & 0xFF00) !== 0xFF00 || len < 2) break;
+      off += 2 + len;
+    }
+  } catch (e) {}
+  return '';
+}
 function jstDateOf(ms) { return new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 10); }
 function amountFor(t, ncourse, staff) {
   if (!TICKET_RE.test(t)) return null;
@@ -852,6 +883,8 @@ function makeRow(file) {
     el('label', { className: 'chk2' }, [staff, el('span', { textContent: 'スタッフ割(20%引き)の券' })]),
     rm
   ]);
+  exifDateOf(file).then(d => { if (d && !r.dateTouched) { r.date = d; din.value = d; refreshAll(); } });   // 撮影日があれば、それを仮に入れる
+  din.addEventListener('input', () => { r.dateTouched = true; });
   return r;
 }
 async function runBatchOcr() {
@@ -995,41 +1028,98 @@ function yRefresh() {
     let kind = 'ok', text = '✓ 記録できます';
     if (r.done) { kind = 'ok'; text = '✓ 記録しました'; }
     else if (r.err) { kind = 'ng'; text = r.err; }
-    else if (!r.ticket) { kind = 'warn'; text = '写真を見て、券番号を入力してください。'; }
-    else if (!Y_RE.test(r.ticket)) { kind = 'ng'; text = '券番号は、「KH26-数字」の形で入力してください(26は年)。'; }
+    else if (r.busy && !r.ticket) { kind = 'warn'; text = '券番号を読み取り中です...(手で入力してもかまいません)'; }
+    else if (!r.ticket) { kind = 'warn'; text = r.ocrFail ? '自動で読み取れませんでした。写真を見て、KHのあとの数字だけを入力してください。' : '写真を見て、KHのあとの数字を入力してください。'; }
+    else if (!Y_RE.test(r.ticket)) { kind = 'ng'; text = '券番号は、KHのあとの数字だけを入力してください。'; }
     else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
     else if (r.dup) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります。'; }
     else if (!r.date) { kind = 'warn'; text = '日付を入れてください。'; }
+    else if (!r.done && (r.auto || r.dateNote)) { kind = 'ok'; text = '✓ 記録できます' + (r.auto ? '。券番号は自動で読み取りました。写真と見比べてください' : '') + (r.dateNote ? '。日付は' + r.dateNote : ''); }
     r.e.st.className = 'st ' + kind; r.e.st.textContent = text;
   });
   const n = yRows.filter(yRowReady).length;
   $('y-save').disabled = yBusy || n === 0;
   $('y-save').textContent = n ? `${n}枚を記録する` : '記録できる優待券がありません';
 }
+// 優待券の番号:「KH」+年(2桁)は、ほぼ変わらないので、数字の部分だけを入力・読み取りする
+const Y_YY = () => String(todayJST()).slice(2, 4);
+function yParse(raw, yy) {
+  const v = (raw || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).replace(/[\s　]/g, '').replace(/[ー－―−‐-]/g, '-').toUpperCase();
+  const m = v.match(/^KH([0-9]{2})-?([0-9]*)$/);
+  if (m) return { yy: m[1], num: m[2] };
+  return { yy, num: v.replace(/[^0-9]/g, '') };
+}
+// 写真の文字から「KH26-12345」を探す(読み違えやすい文字は、数字に直す)
+function yExtract(text) {
+  const t = (text || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  const out = [], re = /K\s*H\s*([0-9OIlSB]{2})\s*[-ー－―−‐—–_.:~・]?\s*([0-9OIlSB]{1,8})/gi;
+  const fix = (x) => x.replace(/[Oo]/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
+  let m; while ((m = re.exec(t))) out.push({ yy: fix(m[1]), num: fix(m[2]) });
+  return out;
+}
+let yOcrChain = Promise.resolve();
+function yOcr(file) {          // 1枚ずつ、順番に読む
+  const run = async () => {
+    const worker = await getWorker();
+    try { await worker.setParameters({ tessedit_pageseg_mode: '11' }); } catch (e) {}
+    const votes = new Map();
+    for (const size of [1600, 2400]) {
+      const canvas = await toCanvas(file, size);
+      const { data } = await worker.recognize(canvas);
+      yExtract(data.text || '').forEach(c => { const k = c.yy + '|' + c.num; votes.set(k, (votes.get(k) || 0) + 1); });
+      if ([...votes.values()].some(n => n >= 2)) break;
+    }
+    if (!votes.size) return null;
+    const thisYY = Y_YY();
+    const ranked = [...votes.entries()].sort((a, b) => ((b[0].startsWith(thisYY + '|')) - (a[0].startsWith(thisYY + '|'))) || (b[1] - a[1]));
+    const [yy, num] = ranked[0][0].split('|');
+    return { yy, num };
+  };
+  const p = yOcrChain.then(run, run);
+  yOcrChain = p.catch(() => {});
+  return p;
+}
 function yMakeRow(file) {
   const url = URL.createObjectURL(file);
   const img = el('img', { src: url, alt: '優待券' });
   img.addEventListener('click', () => img.classList.toggle('big'));
-  const tin = el('input', { type: 'text', className: 'bt', placeholder: 'KH26-123', autocomplete: 'off', autocapitalize: 'characters', maxLength: 24 });
+  const yy0 = Y_YY();
+  const pre = el('span', { className: 'ypre', textContent: `KH${yy0}-` });
+  const tin = el('input', { type: 'text', className: 'bt', placeholder: '数字だけ(例 11210)', autocomplete: 'off', maxLength: 24 });
+  tin.setAttribute('inputmode', 'numeric');
   const din = el('input', { type: 'date', value: $('y-date').value, max: todayJST() });
   const st = el('div', { className: 'st warn' });
   const rm = el('button', { type: 'button', className: 'rm', textContent: 'この写真を一覧から外す' });
-  const box = el('div', { className: 'brow' }, [img, el('label', { textContent: '券番号' }), tin, el('label', { textContent: '日付' }), din, st, rm]);
-  const r = { file, ticket: '', date: din.value, box, e: { tin, din, st }, url };
+  const box = el('div', { className: 'brow' }, [img, el('label', { textContent: '券番号(KHのあとの数字)' }), el('div', { className: 'yline' }, [pre, tin]), el('label', { textContent: '日付(写真の撮影日を、仮に入れています)' }), din, st, rm]);
+  const r = { file, ticket: '', yy: yy0, date: din.value, box, e: { tin, din, st, pre }, url, busy: true, auto: false, dateNote: '' };
   let tmr = null;
-  tin.addEventListener('input', () => {
-    const v = normalizeYutai(tin.value); if (tin.value !== v) tin.value = v;
-    r.ticket = v; r.err = ''; r.prior = null; yRefresh();
+  const setNum = (yy, num, auto) => {
+    r.yy = yy; pre.textContent = `KH${yy}-`; tin.value = num;
+    r.ticket = num ? `KH${yy}-${num}` : ''; r.auto = !!auto; r.err = ''; r.prior = null; yRefresh();
     clearTimeout(tmr);
-    if (Y_RE.test(v)) tmr = setTimeout(async () => {      // すでに記録されていないかを、先に確認する
+    if (Y_RE.test(r.ticket)) { const v = r.ticket; tmr = setTimeout(async () => {      // すでに記録されていないかを、先に確認する
       const { data } = await sb.from('yutai_usage_log').select('store_name,used_date').eq('ticket_number', v).limit(1);
       if (r.ticket !== v) return;
       r.prior = (data && data[0]) ? `${data[0].used_date} に ${data[0].store_name} で記録済み` : null;
       yRefresh();
-    }, 400);
-  });
-  din.addEventListener('change', () => { r.date = din.value; yRefresh(); });
+    }, 300); }
+  };
+  r.setNum = setNum;
+  tin.addEventListener('input', () => { const p = yParse(tin.value, r.yy); setNum(p.yy, p.num, false); });
+  din.addEventListener('change', () => { r.date = din.value; r.dateNote = ''; yRefresh(); });
   rm.addEventListener('click', () => { yRows = yRows.filter(x => x !== r); box.remove(); try { URL.revokeObjectURL(url); } catch (e) {} yRefresh(); });
+  // 日付:写真の撮影日 → (なければ)写真ファイルの日付が今日でない場合はそれ → (なければ)上で選んだ日
+  exifDateOf(file).then(d => {
+    let dd = d, note = d ? '写真の撮影日を入れました' : '';
+    if (!dd && file.lastModified && jstDateOf(file.lastModified) !== jstDateOf(Date.now())) { dd = jstDateOf(file.lastModified); note = '写真ファイルの日付を入れました'; }
+    if (dd && dd <= todayJST() && !r.dateTouched) { r.date = dd; din.value = dd; r.dateNote = note + `(${dd})。違うときは直してください`; yRefresh(); }
+  });
+  din.addEventListener('input', () => { r.dateTouched = true; });
+  // 番号:自動で読み取り(読めなかったときだけ、手入力)
+  yOcr(file).then(res => {
+    r.busy = false;
+    if (res && !r.ticket) setNum(res.yy, res.num, true); else { r.ocrFail = !res; yRefresh(); }
+  }).catch(() => { r.busy = false; r.ocrFail = true; yRefresh(); });
   return r;
 }
 function yAddFiles(filesIn) {
