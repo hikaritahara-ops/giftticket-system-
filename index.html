@@ -802,10 +802,11 @@
             <option value="none">お会計なし(要確認)</option>
             <option value="nodata">お会計データ未取込</option>
           </select></div>
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">券番号で検索</label><input id="store-filter-q" type="search" placeholder="例: C0014303 / 0014303" oninput="renderStoreView()" style="min-width:180px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:inherit"></div>
         <button class="btn-small" onclick="loadStoreView()">再読み込み</button>
         <button class="btn-small" onclick="exportStoreExcel()">📥 Excelで出力</button>
       </div>
-      <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。</div>
+      <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合・券番号)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。</div>
       <div id="store-view-body"></div>
       <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(店舗の記録 と お会計データ)</h3>
       <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。店舗の記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
@@ -1149,16 +1150,15 @@ async function matchStoreWithPos(logs) {
         if (hit) break;
       }
     }
-    // 1枚が、半分ずつ2行に分かれている
+    // 1枚が、2行に分かれている(例:90,000円 = 45,000円×2、194,000円 = 122,000円 + 72,000円)
     rows.forEach(r => {
       if (r.pos === 'ok') return;
       for (const a of posCandidates(r.log)) {
-        if (a % 2) continue;
-        const h = a / 2, i1 = pl.findIndex(p => Number(p.sales_amount) === h);
-        if (i1 < 0) continue;
-        const i2 = pl.findIndex((p, i) => i !== i1 && Number(p.sales_amount) === h);
-        if (i2 < 0) continue;
-        pl.splice(Math.max(i1, i2), 1); pl.splice(Math.min(i1, i2), 1); r.pos = 'ok'; return;
+        for (let i1 = 0; i1 < pl.length; i1++) {
+          const i2 = pl.findIndex((p, i) => i > i1 && Number(p.sales_amount) + Number(pl[i1].sales_amount) === a);
+          if (i2 < 0) continue;
+          pl.splice(i2, 1); pl.splice(i1, 1); r.pos = 'ok'; return;
+        }
       }
     });
   });
@@ -1169,7 +1169,9 @@ function storeFilteredRows() {
   const fs = document.getElementById('store-filter-store').value;
   const fmo = document.getElementById('store-filter-month').value;
   const fp = document.getElementById('store-filter-pos').value;
-  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo));
+  const qe = document.getElementById('store-filter-q');
+  const q = qe ? qe.value.normalize('NFKC').replace(/\s+/g, '').toUpperCase() : '';
+  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo) && (!q || String(r.log.ticket_number || '').toUpperCase().includes(q)));
 }
 const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
 for (let i = 0; i < 10; i++) STORE_COURSE[String(i)] = 'プラチナムペント 4時間(2名様用)';
@@ -2149,13 +2151,15 @@ async function rematchBatch(targets, allRows) {
   sorted.forEach(r => { found.set(r.ticket_number, take(r)); });
   // 2回目: 残った券を、POSの「2つに分かれた会計」「1つにまとまった会計」と結びつける
   const rest = sorted.filter(r => !found.get(r.ticket_number) && mdOf(r) && r.face_value && r.ticket_number);
-  rest.forEach(r => { // 分割: 90,000円の券 = POSの45,000円×2
-    const st = posOf(r), md = mdOf(r);
+  rest.forEach(r => { // 分割: 1枚の券 = POSの2行(例:90,000円 = 45,000円×2、194,000円 = 122,000円 + 72,000円)
+    const st = posOf(r), md = mdOf(r), pre = `${st}|${md}|`;
+    const same = []; pool.forEach((arr, k) => { if (k.startsWith(pre)) arr.forEach(p => same.push({ k, p })); });
     for (const amt of amountsOf(r)) {
-      const arr = pool.get(`${st}|${md}|${amt / 2}`);
-      if (Number.isInteger(amt / 2) && arr && arr.length >= 2) {
-        const a = arr.shift(), b = arr.shift();
-        found.set(r.ticket_number, { row: a, amt, note: `POSでは ${(amt / 2).toLocaleString()}円×2 に分かれて登録されています` });
+      for (let i = 0; i < same.length; i++) for (let j = i + 1; j < same.length; j++) {
+        if (Number(same[i].p.sales_amount) + Number(same[j].p.sales_amount) !== amt) continue;
+        [same[i], same[j]].forEach(x => { const arr = pool.get(x.k); const ix = arr.indexOf(x.p); if (ix >= 0) arr.splice(ix, 1); });
+        const a1 = Number(same[i].p.sales_amount), a2 = Number(same[j].p.sales_amount);
+        found.set(r.ticket_number, { row: same[i].p, amt, note: `POSでは ${a1.toLocaleString()}円 + ${a2.toLocaleString()}円 の2行に分かれて登録されています` });
         return;
       }
     }
