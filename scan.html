@@ -1112,14 +1112,16 @@ function yOcr(file) {          // 1枚ずつ、順番に読む
       }
       // 見つからないとき:写真を区切って、一部分ずつ読む(右下・中央から)
       const big = await toCanvas(file, 2600);
-      const W = big.width, H = big.height, tw = 0.45, th = 0.35;
-      const tiles = [[0.5, 0.5], [0.55, 0.65], [0.3, 0.5], [0.5, 0.3], [0.3, 0.3], [0, 0.5], [0.55, 0]];
+      const W = big.width, H = big.height, tw = 0.4, th = 0.3;
+      const tiles = [];
+      for (let x = 0; x + tw <= 1.001; x += tw / 2) for (let y = 0; y + th <= 1.001; y += th / 2) tiles.push([x, y]);
+      tiles.sort((a, b) => (Math.abs(a[0] + tw / 2 - 0.6) + Math.abs(a[1] + th / 2 - 0.5)) - (Math.abs(b[0] + tw / 2 - 0.6) + Math.abs(b[1] + th / 2 - 0.5)));
       for (const [fx, fy] of tiles) {
         const sw = Math.round(W * tw), sh = Math.round(H * th);
         const c = document.createElement('canvas');
-        c.width = 1200; c.height = Math.round(sh * 1200 / sw);
+        c.width = 1400; c.height = Math.round(sh * 1400 / sw);
         c.getContext('2d').drawImage(big, Math.round(W * fx), Math.round(H * fy), sw, sh, 0, 0, c.width, c.height);
-        for (const psm of ['11', '6']) {
+        for (const psm of ['6', '11']) {
           try { await worker.setParameters({ tessedit_pageseg_mode: psm }); } catch (e) {}
           const { data } = await worker.recognize(c);
           add(data.text);
