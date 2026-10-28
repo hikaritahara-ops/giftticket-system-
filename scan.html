@@ -1089,19 +1089,47 @@ let yOcrChain = Promise.resolve();
 function yOcr(file) {          // 1枚ずつ、順番に読む
   const run = async () => {
     const worker = await getWorker();
-    try { await worker.setParameters({ tessedit_pageseg_mode: '11' }); } catch (e) {}
     const votes = new Map();
-    for (const size of [1600, 2400]) {
-      const canvas = await toCanvas(file, size);
-      const { data } = await worker.recognize(canvas);
-      yExtract(data.text || '').forEach(c => { const k = c.yy + '|' + c.num; votes.set(k, (votes.get(k) || 0) + 1); });
-      if ([...votes.values()].some(n => n >= 2)) break;
+    const add = (text) => yExtract(text || '').forEach(c => { const k = c.yy + '|' + c.num; votes.set(k, (votes.get(k) || 0) + 1); });
+    // 読み取りは、画像の大きさや読み方で結果が変わるため、いろいろな組み合わせで読み、多く出たものを採用する
+    const best = () => {
+      const thisYY = Y_YY();
+      return [...votes.entries()].map(([k, n]) => {
+        const [yy, num] = k.split('|');
+        return { yy, num, score: n * 10 + Math.min(num.length, 6) * 3 + (yy === thisYY ? 5 : 0) };
+      }).sort((a, b) => b.score - a.score)[0] || null;
+    };
+    const enough = () => [...votes.entries()].some(([k, n]) => n >= 2 && k.split('|')[1].length >= 4);
+    try {
+      for (const size of [1600, 1000, 1300, 2000]) {
+        const canvas = await toCanvas(file, size);
+        for (const psm of ['11', '6']) {
+          try { await worker.setParameters({ tessedit_pageseg_mode: psm }); } catch (e) {}
+          const { data } = await worker.recognize(canvas);
+          add(data.text);
+          if (enough()) return best();
+        }
+      }
+      // 見つからないとき:写真を区切って、一部分ずつ読む(右下・中央から)
+      const big = await toCanvas(file, 2600);
+      const W = big.width, H = big.height, tw = 0.45, th = 0.35;
+      const tiles = [[0.5, 0.5], [0.55, 0.65], [0.3, 0.5], [0.5, 0.3], [0.3, 0.3], [0, 0.5], [0.55, 0]];
+      for (const [fx, fy] of tiles) {
+        const sw = Math.round(W * tw), sh = Math.round(H * th);
+        const c = document.createElement('canvas');
+        c.width = 1200; c.height = Math.round(sh * 1200 / sw);
+        c.getContext('2d').drawImage(big, Math.round(W * fx), Math.round(H * fy), sw, sh, 0, 0, c.width, c.height);
+        for (const psm of ['11', '6']) {
+          try { await worker.setParameters({ tessedit_pageseg_mode: psm }); } catch (e) {}
+          const { data } = await worker.recognize(c);
+          add(data.text);
+        }
+        if (enough()) break;
+      }
+    } finally {
+      try { await worker.setParameters({ tessedit_pageseg_mode: '11' }); } catch (e) {}
     }
-    if (!votes.size) return null;
-    const thisYY = Y_YY();
-    const ranked = [...votes.entries()].sort((a, b) => ((b[0].startsWith(thisYY + '|')) - (a[0].startsWith(thisYY + '|'))) || (b[1] - a[1]));
-    const [yy, num] = ranked[0][0].split('|');
-    return { yy, num };
+    return best();
   };
   const p = yOcrChain.then(run, run);
   yOcrChain = p.catch(() => {});
