@@ -464,6 +464,10 @@
   .store-row.open .arrow { transform: rotate(90deg); }
   .store-summary { display: flex; gap: 1.5rem; font-size: 0.78rem; color: var(--text2); }
   .store-summary .num { font-family: 'DM Mono', monospace; color: var(--accent); font-weight: 500; }
+  .pos-pill { border: 1px solid var(--border); background: transparent; color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 0.78rem; cursor: pointer; font-family: inherit; }
+  .pos-pill:hover { border-color: var(--accent); }
+  .pos-pill.active { border-color: var(--accent); background: rgba(59,130,246,0.14); color: var(--text); }
+  .pos-tab-title { font-size: .82rem; color: var(--text2); padding: 8px 16px 0; }
   .store-detail { display: none; border-top: 1px solid var(--border); }
   .store-row.open .store-detail { display: block; }
   .empty-state { text-align: center; padding: 2rem; color: var(--text3); font-size: 0.82rem; }
@@ -2641,24 +2645,24 @@ function renderPosStoreView() {
     ${storeNames.map((name, idx) => {
       const info = byStore[name];
       const sortedRows = info.rows.slice().sort((a, b) => (b.sale_date || '').localeCompare(a.sale_date || ''));
+      const mkTable = (list) => list.length ? `<div class="table-scroll" style="max-height:260px;border:none;border-radius:0"><table>
+                <thead><tr><th>照合</th><th>日付</th><th>金額</th><th>顧客名</th></tr></thead>
+                <tbody>${list.map(r => `<tr>${isPosRowMatched(r) ? '<td><span class="badge badge-ok">✅ 読取済</span></td>' : '<td style="color:var(--text3)">—</td>'}<td class="mono">${r.sale_date || '—'}</td><td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td><td>${r.customer_name || '—'}</td></tr>`).join('')}</tbody>
+              </table></div>` : '<div class="hint" style="padding:10px 16px">この月の該当するお会計はありません。</div>';
+      const tkRows = sortedRows.filter(r => r.card_type === 'ﾁｹｯﾄ');
+      const ytRows = sortedRows.filter(r => r.card_type === '株主KeyHolder請求');
       return `
         <div class="store-row" id="pos-store-row-${idx}">
           <div class="store-row-head" onclick="togglePosStoreRow(${idx})">
             <div class="store-name"><span class="arrow">▶</span>${name}</div>
             <div class="store-summary">
-              <span title="ギフトチケット(ﾁｹｯﾄ)の売上">チケット: <span class="num">¥${info.tk.toLocaleString()}</span>(${info.tkN}件)</span>
-              <span title="株主優待券(株主KeyHolder請求)">優待券: <span class="num">¥${info.yt.toLocaleString()}</span>(${info.ytN}件)</span>
+              <button type="button" class="pos-pill active" data-k="tk" onclick="showPosTab(${idx},'tk',event)" title="ギフトチケット(ﾁｹｯﾄ)の明細を表示">チケット: <span class="num">¥${info.tk.toLocaleString()}</span>(${info.tkN}件)</button>
+              <button type="button" class="pos-pill" data-k="yt" onclick="showPosTab(${idx},'yt',event)" title="株主優待券(株主KeyHolder請求)の明細を表示">優待券: <span class="num">¥${info.yt.toLocaleString()}</span>(${info.ytN}件)</button>
             </div>
           </div>
           <div class="store-detail">
-            <div class="table-scroll" style="max-height:260px;border:none;border-radius:0">
-              <table>
-                <thead><tr><th>照合</th><th>日付</th><th>金額</th><th>顧客名</th></tr></thead>
-                <tbody>
-                  ${sortedRows.map(r => `<tr>${isPosRowMatched(r) ? '<td><span class="badge badge-ok">✅ 読取済</span></td>' : '<td style="color:var(--text3)">—</td>'}<td class="mono">${r.sale_date || '—'}</td><td class="mono">¥${(r.sales_amount||0).toLocaleString()}</td><td>${r.customer_name || '—'}</td></tr>`).join('')}
-                </tbody>
-              </table>
-            </div>
+            <div class="pos-tab" data-k="tk"><div class="pos-tab-title">ギフトチケット(ﾁｹｯﾄ) ${info.tkN}件 / ¥${info.tk.toLocaleString()}</div>${mkTable(tkRows)}</div>
+            <div class="pos-tab" data-k="yt" style="display:none"><div class="pos-tab-title">株主優待券(株主KeyHolder請求) ${info.ytN}件 / ¥${info.yt.toLocaleString()}</div>${mkTable(ytRows)}</div>
           </div>
         </div>
       `;
@@ -2667,6 +2671,15 @@ function renderPosStoreView() {
   body.innerHTML = html;
 }
 function togglePosStoreRow(idx) { document.getElementById(`pos-store-row-${idx}`).classList.toggle('open'); }
+// 「チケット」「優待券」を押すと、その店舗の明細を開いて、押したほうだけを表示する
+function showPosTab(idx, k, ev) {
+  if (ev) ev.stopPropagation();
+  const row = document.getElementById(`pos-store-row-${idx}`);
+  if (!row) return;
+  row.classList.add('open');
+  row.querySelectorAll('.pos-tab').forEach(t => { t.style.display = t.dataset.k === k ? '' : 'none'; });
+  row.querySelectorAll('.pos-pill').forEach(b => b.classList.toggle('active', b.dataset.k === k));
+}
 
 /* ==================== ページ3: 発券データ取り込み ==================== */
 let ticketParsedRows = [];
