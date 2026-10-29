@@ -791,7 +791,7 @@
   <div class="page" id="page-store">
     <div class="card">
       <h2><div class="left">店舗の記録(iPadで、店舗が記録した券)</div></h2>
-      <div class="hint">店舗が記録画面で記録した券の一覧です。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。</div>
+      <div class="hint">店舗が記録画面で記録した券の一覧です。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。「⬇ 保存」で、その写真だけを保存できます(店舗へ送るときに便利です)。まとめて保存するときは、上の「📷 写真をまとめて保存(ZIP)」を使います。</div>
       <div id="store-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">店舗</label><select id="store-filter-store" onchange="renderStoreView()"><option value="">すべて</option></select></div>
@@ -1289,7 +1289,7 @@ function renderStoreView() {
   body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>お会計</th><th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
     rows.map(r => {
       const l = r.log;
-      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
     }).join('') + '</tbody></table></div>';
 }
 // ---- 記録の修正・削除は、管理部のアカウントだけ(データベース側でも、同じ制限をかけています) ----
@@ -1463,7 +1463,7 @@ function renderYutai() {
   else {
     const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
     body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>撮影日(利用日)</th><th>記録者</th><th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
-      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" onclick="viewTicketPhoto(this.dataset.photo)">📷 見る</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button> <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
+      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button> <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
       '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">先頭の500件だけ表示しています。</div>' : '');
   }
   // POSの優待処理の明細
@@ -1593,17 +1593,44 @@ async function downloadPhotosZip(kind) {
   } finally { zipBusy = false; }
 }
 // 店舗で保存した券の写真を、ログインしている人だけが見られるように、取り出して表示する
-async function viewTicketPhoto(path) {
+// 写真のファイル名:店舗_利用日_券番号
+function photoFileName(r) {
+  const safe = (x) => String(x == null ? '' : x).replace(/[\\/:*?"<>|\s]+/g, '_');
+  const ext = (String(r.photo_path || '').match(/\.([A-Za-z0-9]+)$/) || [, 'jpg'])[1].toLowerCase();
+  return `${safe(r.store_name)}_${String(r.used_date || '').slice(0, 10)}_${safe(r.ticket_number)}.${ext}`;
+}
+async function fetchTicketPhotoBlob(path) {
+  const url = `${SUPABASE_URL}/storage/v1/object/authenticated/ticket-photos/${String(path).split('/').map(encodeURIComponent).join('/')}`;
+  const res = await fetch(url, { headers: sbHeaders() });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.blob();
+}
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name || 'ticket.jpg';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+async function downloadTicketPhoto(path, name) {
+  try { saveBlob(await fetchTicketPhotoBlob(path), name); showToast('写真を保存しました', 'success'); }
+  catch (e) { showToast('写真を保存できませんでした', 'error'); }
+}
+async function viewTicketPhoto(path, name) {
   try {
-    const url = `${SUPABASE_URL}/storage/v1/object/authenticated/ticket-photos/${String(path).split('/').map(encodeURIComponent).join('/')}`;
-    const res = await fetch(url, { headers: sbHeaders() });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const blobUrl = URL.createObjectURL(await res.blob());
+    const blob = await fetchTicketPhotoBlob(path);
+    const blobUrl = URL.createObjectURL(blob);
     const ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;cursor:zoom-out';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;cursor:zoom-out';
     const img = document.createElement('img');
-    img.src = blobUrl; img.style.cssText = 'max-width:100%;max-height:100%;border-radius:8px;background:#fff';
-    ov.appendChild(img);
+    img.src = blobUrl; img.style.cssText = 'max-width:100%;max-height:calc(100% - 52px);border-radius:8px;background:#fff';
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:10px;align-items:center;color:#fff;font-size:.85rem';
+    const dl = document.createElement('button');
+    dl.className = 'btn-small'; dl.textContent = '⬇ この写真を保存'; dl.style.cursor = 'pointer';
+    dl.addEventListener('click', (ev) => { ev.stopPropagation(); saveBlob(blob, name || 'ticket.jpg'); });
+    const tip = document.createElement('span'); tip.textContent = (name ? name + '  ' : '') + '(写真の外を押すと閉じます)';
+    bar.append(dl, tip);
+    ov.append(img, bar);
     ov.addEventListener('click', () => { URL.revokeObjectURL(blobUrl); ov.remove(); });
     document.body.appendChild(ov);
   } catch (e) { showToast('写真を開けませんでした', 'error'); }
