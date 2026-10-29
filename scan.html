@@ -1087,41 +1087,50 @@ function yExtract(text) {
   return out;
 }
 // 優待券の番号は、黒い太い枠の中に印字されている。枠を先に見つけて、その中だけを拡大して読む(速く、正確)
+// 枠は、写真の大きさ・傾き・遠さが変わっても見つかるよう、「黒い線でつながった、横長の輪」として探す
 function yFindFrames(file) {
-  return toCanvas(file, 1000).then(small => {
+  return toCanvas(file, 700).then(small => {
     const W = small.width, H = small.height;
     const d = small.getContext('2d').getImageData(0, 0, W, H).data;
     const g = new Float32Array(W * H);
     for (let i = 0; i < W * H; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
-    // まわりの明るさの平均(積分画像)より、かなり暗い所を「黒」とする
     const I = new Float64Array((W + 1) * (H + 1));
     for (let y = 0; y < H; y++) { let rs = 0; for (let x = 0; x < W; x++) { rs += g[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + rs; } }
-    const R = 20, dark = new Uint8Array(W * H);
+    const R = Math.max(8, Math.round(Math.min(W, H) * 0.06 / 2)), dark = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const x0 = Math.max(0, x - R), x1 = Math.min(W, x + R + 1), y0 = Math.max(0, y - R), y1 = Math.min(H, y + R + 1);
       const sum = I[y1 * (W + 1) + x1] - I[y0 * (W + 1) + x1] - I[y1 * (W + 1) + x0] + I[y0 * (W + 1) + x0];
-      dark[y * W + x] = g[y * W + x] < sum / ((x1 - x0) * (y1 - y0)) - 45 ? 1 : 0;
+      dark[y * W + x] = g[y * W + x] < sum / ((x1 - x0) * (y1 - y0)) - 35 ? 1 : 0;
     }
-    const runs = [];
-    for (let y = 0; y < H; y++) { let x = 0; while (x < W) { if (dark[y * W + x]) { const a = x; while (x < W && dark[y * W + x]) x++; if (x - a >= 70) runs.push([y, a, x]); } else x++; } }
-    const found = [];
-    for (const [y, a, b] of runs) for (const [y2, a2, b2] of runs) {
-      const h = y2 - y, w = b - a;
-      if (h >= 22 && h <= 60 && Math.abs(a - a2) < 8 && Math.abs(b - b2) < 8 && w / h > 2.5 && w / h < 8) {
-        let n = 0, t = 0;
-        for (let yy = y + 6; yy < y2 - 3; yy++) for (let xx = a + 6; xx < b - 6; xx++) { n += dark[yy * W + xx]; t++; }
-        const inner = t ? n / t : 1;
-        if (inner < 0.3 && !found.some(f => Math.abs(f.y - y) < 10 && Math.abs(f.x - a) < 10)) found.push({ inner, x: a, y, x2: b, y2, W, H });
+    // つながった黒い部分(8方向)ごとに、大きさを調べる
+    const seen = new Uint8Array(W * H), stack = new Int32Array(W * H), found = [];
+    for (let st = 0; st < W * H; st++) {
+      if (!dark[st] || seen[st]) continue;
+      let sp = 0, cnt = 0, x0 = W, x1 = 0, y0 = H, y1 = 0;
+      stack[sp++] = st; seen[st] = 1;
+      while (sp) {
+        const p = stack[--sp], px = p % W, py = (p - px) / W;
+        cnt++; if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = px + dx, ny = py + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const q = ny * W + nx;
+          if (dark[q] && !seen[q]) { seen[q] = 1; stack[sp++] = q; }
+        }
       }
+      const w = x1 - x0 + 1, h = y1 - y0 + 1;
+      if (w < 0.15 * W || h < 0.025 * H || w / h < 2.3 || w / h > 9) continue;
+      if (cnt / (w * h) > 0.4) continue;       // 中までべったり黒い物(影・黒い面)は、枠ではない
+      found.push({ score: Math.abs(w / h - 5.5), fx0: x0 / W, fy0: y0 / H, fx1: (x1 + 1) / W, fy1: (y1 + 1) / H });
     }
-    return found.sort((p, q) => p.inner - q.inner).slice(0, 3);
+    return found.sort((p, q) => p.score - q.score).slice(0, 5);
   });
 }
 async function yReadFrame(file, f, worker) {
   const big = await toCanvas(file, 2000);
-  const k = big.width / f.W, pad = 6;
-  const sx = Math.round((f.x + pad) * k), sy = Math.round((f.y + pad) * k);
-  const sw = Math.round((f.x2 - f.x - pad * 2) * k), sh = Math.round((f.y2 - f.y - pad * 2) * k);
+  const BW = big.width, BH = big.height, pad = 0.012;
+  const sx = Math.round((f.fx0 + pad) * BW), sy = Math.round((f.fy0 + pad * 0.6) * BH);
+  const sw = Math.round((f.fx1 - f.fx0 - pad * 2) * BW), sh = Math.round((f.fy1 - f.fy0 - pad * 1.2) * BH);
   if (sw < 20 || sh < 8) return [];
   const c = document.createElement('canvas');
   c.height = 120; c.width = Math.round(sw * 120 / sh);
@@ -1152,6 +1161,7 @@ function yOcr(file) {          // 1枚ずつ、順番に読む
   const run = async () => {
     const worker = await getWorker();
     await yLoadLens();
+    const T0 = Date.now(), over = () => Date.now() - T0 > 45000;   // 万一のための上限(ふつうは1〜3秒で終わる)。それ以上かかるときは、手入力にまかせる
     const votes = new Map();
     const add = (text) => yExtract(text || '').forEach(c => { const k = c.yy + '|' + c.num; votes.set(k, (votes.get(k) || 0) + 1); });
     // 読み取りは、画像の大きさや読み方で結果が変わるため、いろいろな組み合わせで読み、多く出たものを採用する
@@ -1168,15 +1178,17 @@ function yOcr(file) {          // 1枚ずつ、順番に読む
       try {
         const frames = await yFindFrames(file);
         for (const f of frames) {
+          if (over()) return best();
           const cs = await yReadFrame(file, f, worker);
           cs.forEach(c => { const k = c.yy + '|' + c.num; votes.set(k, (votes.get(k) || 0) + 2); });
           if (enough()) return best();
         }
       } catch (e) {}
       // ② 枠が見つからないとき:全体を読む
-      for (const size of [1600, 1000, 1300, 2000]) {
+      for (const size of [1000, 1300, 1600]) {
         const canvas = await toCanvas(file, size);
-        for (const psm of ['11', '6']) {
+        for (const psm of ['6', '11']) {
+          if (over()) return best();
           try { await worker.setParameters({ tessedit_pageseg_mode: psm }); } catch (e) {}
           const { data } = await worker.recognize(canvas);
           add(data.text);
@@ -1189,12 +1201,13 @@ function yOcr(file) {          // 1枚ずつ、順番に読む
       const tiles = [];
       for (let x = 0; x + tw <= 1.001; x += tw / 2) for (let y = 0; y + th <= 1.001; y += th / 2) tiles.push([x, y]);
       tiles.sort((a, b) => (Math.abs(a[0] + tw / 2 - 0.6) + Math.abs(a[1] + th / 2 - 0.5)) - (Math.abs(b[0] + tw / 2 - 0.6) + Math.abs(b[1] + th / 2 - 0.5)));
-      for (const [fx, fy] of tiles) {
+      for (const [fx, fy] of tiles.slice(0, 10)) {
+        if (over()) break;
         const sw = Math.round(W * tw), sh = Math.round(H * th);
         const c = document.createElement('canvas');
         c.width = 1400; c.height = Math.round(sh * 1400 / sw);
         c.getContext('2d').drawImage(big, Math.round(W * fx), Math.round(H * fy), sw, sh, 0, 0, c.width, c.height);
-        for (const psm of ['6', '11']) {
+        for (const psm of ['6']) {
           try { await worker.setParameters({ tessedit_pageseg_mode: psm }); } catch (e) {}
           const { data } = await worker.recognize(c);
           add(data.text);
