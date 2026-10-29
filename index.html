@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ギフチケ照合管理システム</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -805,8 +806,9 @@
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">券番号で検索</label><input id="store-filter-q" type="search" placeholder="例: C0014303 / 0014303" oninput="renderStoreView()" style="min-width:180px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:inherit"></div>
         <button class="btn-small" onclick="loadStoreView()">再読み込み</button>
         <button class="btn-small" onclick="exportStoreExcel()">📥 Excelで出力</button>
+        <button class="btn-small" onclick="downloadPhotosZip('gift')">📷 写真をまとめて保存(ZIP)</button>
       </div>
-      <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合・券番号)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。</div>
+      <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合・券番号)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。「写真をまとめて保存」は、同じ条件の券の写真を、店舗ごとのフォルダに分けたZIPで保存します(月末のバックアップにも使えます)。</div>
       <div id="store-view-body"></div>
       <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(店舗の記録 と お会計データ)</h3>
       <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。店舗の記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
@@ -834,6 +836,7 @@
           </select></div>
         <button class="btn-small" onclick="loadYutaiView()">再読み込み</button>
         <button class="btn-small" onclick="exportYutaiExcel()">📥 Excelで出力</button>
+        <button class="btn-small" onclick="downloadPhotosZip('yutai')">📷 写真をまとめて保存(ZIP)</button>
       </div>
       <h3 style="margin:1rem 0 .4rem;font-size:1rem">店舗×日付ごとの突合(撮影枚数 と POSの優待処理数)</h3>
       <div id="yutai-agg"></div>
@@ -1531,6 +1534,63 @@ async function doYutaiDelete(id) {
     if (r.photo_path) { try { await fetch(`${SUPABASE_URL}/storage/v1/object/ticket-photos/${String(r.photo_path).split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE', headers: sbHeaders() }); } catch (e) {} }
     closeStoreModal(); showToast('削除しました'); await loadYutaiView();
   } catch (e) { showToast('削除できませんでした: ' + e.message, 'error'); }
+}
+// 券の写真を、いま表示している条件のぶんだけ、店舗ごとのフォルダに分けてZIPで保存する(管理部のみ。写真は管理部しか取り出せない設定)
+let zipBusy = false;
+async function downloadPhotosZip(kind) {
+  if (zipBusy) return;
+  if (typeof JSZip === 'undefined') { showToast('ZIPの部品が読み込めていません。画面を再読み込みしてください', 'error'); return; }
+  let rows, label, mo;
+  if (kind === 'yutai') {
+    const fs = document.getElementById('yutai-filter-store').value, fm = document.getElementById('yutai-filter-month').value;
+    rows = yutaiRows.filter(r => (!fs || (STORE_POS_MAPPING[r.store_name] || r.store_name) === fs) && (!fm || String(r.used_date).slice(0, 7) === fm));
+    label = '優待券'; mo = fm || 'all';
+  } else {
+    rows = storeFilteredRows().map(r => r.log);
+    label = '店舗の記録'; mo = document.getElementById('store-filter-month').value || 'all';
+  }
+  const withPhoto = rows.filter(r => r.photo_path);
+  if (!rows.length) { showToast('保存する記録がありません', 'error'); return; }
+  if (!withPhoto.length) { showToast('写真のある記録がありません', 'error'); return; }
+  if (withPhoto.length > 800) { showToast(`写真が${withPhoto.length}枚あります。800枚までにしてください(店舗や月で絞り込めます)`, 'error'); return; }
+  if (!confirm(`${withPhoto.length}枚の写真をZIPで保存します。よろしいですか?(枚数が多いと、数分かかります)`)) return;
+  zipBusy = true;
+  const safe = (x) => String(x == null ? '' : x).replace(/[\\/:*?"<>|\s]+/g, '_');
+  const zip = new JSZip();
+  let done = 0, fail = [];
+  const btnToast = () => showToast(`写真を集めています... ${done}/${withPhoto.length}`, 'success');
+  btnToast();
+  const queue = withPhoto.slice();
+  const used = new Set();
+  async function worker() {
+    while (queue.length) {
+      const r = queue.shift();
+      try {
+        const url = `${SUPABASE_URL}/storage/v1/object/authenticated/ticket-photos/${String(r.photo_path).split('/').map(encodeURIComponent).join('/')}`;
+        const res = await fetch(url, { headers: sbHeaders() });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const ext = (String(r.photo_path).match(/\.([A-Za-z0-9]+)$/) || [, 'jpg'])[1].toLowerCase();
+        let name = `${safe(r.store_name)}/${String(r.used_date).slice(0, 10)}_${safe(r.ticket_number)}`;
+        let n = name, i = 2; while (used.has(n)) n = name + '_' + (i++); used.add(n);
+        zip.file(n + '.' + ext, await res.blob());
+      } catch (e) { fail.push(r.ticket_number); }
+      done++;
+      if (done % 10 === 0) btnToast();
+    }
+  }
+  try {
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    const csvRows = [['店舗', '利用日', '券番号', '写真']].concat(rows.map(r => [r.store_name, String(r.used_date).slice(0, 10), r.ticket_number, r.photo_path ? '有' : '無']));
+    zip.file('一覧.csv', '\ufeff' + csvRows.map(l => l.map(v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"').join(',')).join('\r\n'));
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `写真_${label}_${mo}.zip`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    showToast(fail.length ? `ZIPを保存しました(取り出せなかった写真 ${fail.length}枚: ${fail.slice(0, 5).join('、')}${fail.length > 5 ? ' ほか' : ''})` : `ZIPを保存しました(${withPhoto.length}枚)`, fail.length ? 'error' : 'success');
+  } catch (e) {
+    showToast('ZIPの作成に失敗しました: ' + (e.message || e), 'error');
+  } finally { zipBusy = false; }
 }
 // 店舗で保存した券の写真を、ログインしている人だけが見られるように、取り出して表示する
 async function viewTicketPhoto(path) {
