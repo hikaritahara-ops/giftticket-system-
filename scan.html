@@ -632,7 +632,7 @@ const onPhoto = async (ev) => {
   try {
     const worker = await getWorker();
     const votes = new Map();                       // 番号 → 何回読めたか
-    const sizes = [1600, 2400, 800];               // 大きさを変えて読む
+    const sizes = [1000, 800, 1200, 1600, 2400];   // 大きさを変えて読む(速い、小さい大きさから)
     let valid = [];                                // 発券データにある番号
     for (let k = 0; k < sizes.length; k++) {
       showMsg(area, 'ok', `読み取り中...(${k + 1}/${sizes.length})`);
@@ -798,7 +798,7 @@ function amountFor(t, ncourse, staff, pcourse) {
 async function ocrOne(file, area) {
   const worker = await getWorker();
   const votes = new Map(); let valid = [];
-  for (const size of [1600, 2400, 800]) {
+  for (const size of [1000, 800, 1200, 1600, 2400]) {      // 速い(小さい)大きさから読む。発券データにある番号で、2回読めたら終わり
     const canvas = await toCanvas(file, size);
     const { data } = await worker.recognize(canvas);
     extractCandidates(data.text || '').forEach(c => votes.set(c, (votes.get(c) || 0) + 1));
