@@ -464,6 +464,10 @@
   .store-row.open .arrow { transform: rotate(90deg); }
   .store-summary { display: flex; gap: 1.5rem; font-size: 0.78rem; color: var(--text2); }
   .store-summary .num { font-family: 'DM Mono', monospace; color: var(--accent); font-weight: 500; }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--accent); }
+  th.sortable .sarrow { font-size: .7rem; opacity: .45; }
+  th.sortable.on .sarrow { opacity: 1; color: var(--accent); }
   .pos-pill { border: 1px solid var(--border); background: transparent; color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 0.78rem; cursor: pointer; font-family: inherit; }
   .pos-pill:hover { border-color: var(--accent); }
   .pos-pill.active { border-color: var(--accent); background: rgba(59,130,246,0.14); color: var(--text); }
@@ -795,7 +799,7 @@
   <div class="page" id="page-store">
     <div class="card">
       <h2><div class="left">店舗の記録(iPadで、店舗が記録した券)</div></h2>
-      <div class="hint">店舗が記録画面で記録した券の一覧です。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。「⬇ 保存」で、その写真だけを保存できます(店舗へ送るときに便利です)。まとめて保存するときは、上の「📷 写真をまとめて保存(ZIP)」を使います。</div>
+      <div class="hint">店舗が記録画面で記録した券の一覧です。表の見出し(記録日時・店舗・券番号・利用日など)を押すと、その順に並べ替えられます(もう一度押すと逆順)。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。「⬇ 保存」で、その写真だけを保存できます(店舗へ送るときに便利です)。まとめて保存するときは、上の「📷 写真をまとめて保存(ZIP)」を使います。</div>
       <div id="store-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
         <div><label style="display:block;font-size:0.72rem;color:var(--text3)">店舗</label><select id="store-filter-store" onchange="renderStoreView()"><option value="">すべて</option></select></div>
@@ -1274,6 +1278,38 @@ function renderStorePosOnly() {
     list.slice(0, 300).map(p => `<tr><td>${escH(String(p.sale_date).slice(0, 10))}</td><td>${escH(rev[p.store_name] || p.store_name)}</td><td>¥${Number(p.sales_amount).toLocaleString()}</td><td>${escH(p.customer_name || '')}</td></tr>`).join('') +
     '</tbody></table></div>' + (list.length > 300 ? '<div class="hint">先頭の300件だけ表示しています。店舗・月で絞ってください。</div>' : '');
 }
+// ---- 一覧の並べ替え(見出しを押すと、昇順・降順が切り替わります) ----
+const sortState = { store: { key: 'created_at', dir: -1 }, yutai: { key: 'created_at', dir: -1 } };
+const DATE_KEYS = new Set(['created_at', 'used_date']);
+function sortTh(kind, key, label) {
+  const st = sortState[kind], on = st.key === key;
+  return `<th class="sortable${on ? ' on' : ''}" onclick="setSort('${kind}','${key}')" title="押すと並べ替え(もう一度押すと逆順)">${label}<span class="sarrow">${on ? (st.dir > 0 ? ' ▲' : ' ▼') : ' ↕'}</span></th>`;
+}
+function setSort(kind, key) {
+  const st = sortState[kind];
+  if (st.key === key) st.dir = -st.dir;
+  else { st.key = key; st.dir = DATE_KEYS.has(key) ? -1 : 1; }
+  if (kind === 'store') renderStoreView(); else renderYutai();
+}
+function sortRowsBy(rows, kind) {
+  const { key, dir } = sortState[kind];
+  const POS_ORDER = { none: 0, nodata: 1, ok: 2 };
+  const val = (r) => {
+    const o = kind === 'store' ? (key === 'pos' ? r.pos : r.log[key]) : r[key];
+    if (key === 'pos') return POS_ORDER[o] != null ? POS_ORDER[o] : 9;
+    return o;
+  };
+  const cmp = (a, b) => {
+    const x = val(a), y = val(b);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;           // 空のものは、いつも最後
+    if (y == null) return -1;
+    if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+    return String(x).localeCompare(String(y), 'ja') * dir;
+  };
+  const tie = (r) => String((kind === 'store' ? r.log : r).created_at || '');
+  return rows.slice().sort((a, b) => cmp(a, b) || tie(b).localeCompare(tie(a)));
+}
 function renderStoreView() {
   const fs = document.getElementById('store-filter-store').value;
   const all = storeRows;
@@ -1284,13 +1320,13 @@ function renderStoreView() {
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計データ未取込</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${all.filter(r => r.pos === 'nodata').length}件</div></div>`;
   renderStoreAgg();
   renderStorePosOnly();
-  const rows = storeFilteredRows();
+  const rows = sortRowsBy(storeFilteredRows(), 'store');
   const body = document.getElementById('store-view-body');
   if (!rows.length) { body.innerHTML = '<div class="hint">該当する記録がありません。</div>'; return; }
   const posBadge = (v) => v === 'ok' ? '<span class="badge badge-ok">一致</span>' : v === 'none' ? '<span class="badge badge-danger">お会計なし</span>' : '<span class="badge badge-warn">未取込</span>';
   const fmt = (d) => d ? String(d).slice(0, 10) : '-';
   const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-  body.innerHTML = '<div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>利用日(店舗)</th><th>入力方法</th><th>想定金額</th><th>お会計</th><th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
+  body.innerHTML = '<div class="table-scroll"><table><thead><tr>' + [['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','利用日(店舗)'],['input_method','入力方法'],['expected_amount','想定金額'],['pos','お会計']].map(([k, t]) => sortTh('store', k, t)).join('') + '<th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
     rows.map(r => {
       const l = r.log;
       return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
@@ -1461,12 +1497,12 @@ function renderYutai() {
     list.slice(0, 500).map(e => `<tr><td>${escH(e.d)}</td><td>${escH(rev[e.st] || e.st)}</td><td>${e.photo}枚</td><td>${e.state === 'nodata' ? '-' : e.pos + '件'}</td><td style="${e.state !== 'ok' && e.state !== 'nodata' ? 'color:var(--danger);font-weight:700' : ''}">${e.state === 'nodata' ? '-' : (e.pos - e.photo > 0 ? '+' : '') + (e.pos - e.photo)}</td><td>${lab[e.state]}</td></tr>`).join('') +
     '</tbody></table></div>' + (list.length > 500 ? '<div class="hint">先頭の500行だけ表示しています。</div>' : '');
   // 撮影した優待券の一覧
-  const rows = yutaiRows.filter(r => (!fs || (STORE_POS_MAPPING[r.store_name] || r.store_name) === fs) && (!fm || String(r.used_date).slice(0, 7) === fm));
+  const rows = sortRowsBy(yutaiRows.filter(r => (!fs || (STORE_POS_MAPPING[r.store_name] || r.store_name) === fs) && (!fm || String(r.used_date).slice(0, 7) === fm)), 'yutai');
   const body = document.getElementById('yutai-list');
   if (!rows.length) body.innerHTML = '<div class="hint">撮影した優待券は、まだありません。</div>';
   else {
     const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-    body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr><th>記録日時</th><th>店舗</th><th>券番号</th><th>撮影日(利用日)</th><th>記録者</th><th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
+    body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr>${[['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','撮影日(利用日)'],['created_by','記録者']].map(([k, t]) => sortTh('yutai', k, t)).join('')}<th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
       rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button> <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
       '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">先頭の500件だけ表示しています。</div>' : '');
   }
