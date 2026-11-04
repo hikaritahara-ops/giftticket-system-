@@ -818,6 +818,9 @@
       </div>
       <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合・券番号)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。「写真をまとめて保存」は、同じ条件の券の写真を、店舗ごとのフォルダに分けたZIPで保存します(月末のバックアップにも使えます)。</div>
       <div id="store-view-body"></div>
+      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">読み取り状況(どの店舗の、いつの分が、まだ読み取られていないか)</h3>
+      <div class="hint">お会計(POS)にチケットの会計がある日のうち、店舗の記録がまだない日が <b style="color:var(--danger)">未</b> です。右の「未読み取りの日」に、日付を並べています。上の「利用月」で月を切り替えられます(「すべて」のときは、最新の月)。</div>
+      <div id="store-coverage"></div>
       <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(店舗の記録 と お会計データ)</h3>
       <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。店舗の記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
       <div id="store-agg"></div>
@@ -1093,7 +1096,8 @@ function isTicketPos(p) { return p.card_type === 'ﾁｹｯﾄ' && Number(p.sale
 function posCandidates(l) {
   if (l.expected_amount != null) return [Number(l.expected_amount)];
   const h = (l.ticket_number || '')[0];
-  if (h === 'N') return [5040, 7560, 4032, 6048];
+  if (h === 'N') return [7560, 6048, 5040, 4032];     // N=マグマルーム90分(60分の券が混ざっていても拾えるよう、60分の金額も含める)
+  if (h === 'M') return [5040, 4032];
   const f = STORE_FACE[h];
   return f ? [f, Math.round(f * 0.8)] : [];
 }
@@ -1101,7 +1105,7 @@ async function matchStoreWithPos(logs) {
   storePosLeft = []; storePosAll = []; storePosLast = {};
   const dated = logs.filter(l => l.used_date && l.store_name);
   if (!dated.length) return;
-  const posStores = [...new Set(dated.map(l => STORE_POS_MAPPING[l.store_name]).filter(Boolean))];
+  const posStores = [...new Set(Object.values(STORE_POS_MAPPING).filter(Boolean))];   // 記録がまだ1件もない店舗も、未読み取りとして見えるよう全店舗
   const dates = dated.map(l => String(l.used_date).slice(0, 10)).sort();
   const mn = dates[0], mx = dates[dates.length - 1];
   const inList = posStores.map(n => '"' + n + '"').join(',');
@@ -1184,9 +1188,9 @@ function storeFilteredRows() {
   const q = qe ? qe.value.normalize('NFKC').replace(/\s+/g, '').toUpperCase() : '';
   return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo) && (!q || String(r.log.ticket_number || '').toUpperCase().includes(q)));
 }
-const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
+const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', M:'M(マグマルーム60分)', N:'N(マグマルーム90分)' };
 for (let i = 0; i < 10; i++) STORE_COURSE[String(i)] = 'プラチナムペント 4時間(2名様用)';
-const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
+const STORE_FACE = { A:15840, B:26400, C:31680, P:90000, M:5040, N:7560 };
 // 4時間コース(2名様用・194,000円)は、アルファベットなしの数字(1〜99)だけの券番号
 for (let i = 0; i < 10; i++) STORE_FACE[String(i)] = 194000;
 function exportStoreExcel() {
@@ -1223,6 +1227,59 @@ function exportStoreExcel() {
   const mo = document.getElementById('store-filter-month').value || 'all';
   XLSX.writeFile(wb, `店舗の記録_${mo}.xlsx`);
   showToast('Excelを出力しました', 'success');
+}
+function renderStoreCoverage() {
+  const box = document.getElementById('store-coverage');
+  if (!box) return;
+  const fs = document.getElementById('store-filter-store').value;
+  let mo = document.getElementById('store-filter-month').value;
+  if (!mo) {
+    const ms = storePosAll.map(p => String(p.sale_date).slice(0, 7)).sort();
+    mo = ms.length ? ms[ms.length - 1] : '';
+  }
+  if (!mo) { box.innerHTML = '<div class="hint">お会計データがありません。</div>'; return; }
+  const [Y, M] = mo.split('-').map(Number), days = new Date(Y, M, 0).getDate();
+  const cell = {};   // 店舗(POS名)|日 → { logSum, posSum }
+  const get = (ps, d) => { const k = ps + '|' + d; return cell[k] || (cell[k] = { logSum: 0, logN: 0, posSum: 0, posN: 0 }); };
+  storeRows.forEach(r => {
+    const l = r.log, ps = STORE_POS_MAPPING[l.store_name], d = l.used_date ? String(l.used_date).slice(0, 10) : '';
+    if (!ps || !d || d.slice(0, 7) !== mo) return;
+    const e = get(ps, d); e.logSum += (l.expected_amount != null ? Number(l.expected_amount) : (posCandidates(l)[0] || 0)); e.logN++;
+  });
+  storePosAll.forEach(p => {
+    const d = String(p.sale_date).slice(0, 10);
+    if (d.slice(0, 7) !== mo) return;
+    const e = get(p.store_name, d); e.posSum += Number(p.sales_amount); e.posN++;
+  });
+  const yen = (n) => '¥' + Number(n).toLocaleString();
+  const stores = Object.keys(STORE_POS_MAPPING).filter(n => !fs || n === fs);
+  let head = '<th style="text-align:left;position:sticky;left:0;background:var(--bg2,#121a2b)">店舗</th>';
+  for (let d = 1; d <= days; d++) head += `<th style="padding:4px 3px;text-align:center;font-size:0.68rem">${d}</th>`;
+  head += '<th style="text-align:right">未読み取り</th><th style="text-align:left">未読み取りの日</th>';
+  let totalUn = 0, totalAmt = 0;
+  const rowsHtml = stores.map(sn => {
+    const ps = STORE_POS_MAPPING[sn], last = storePosLast[ps];
+    let un = [], unAmt = 0, any = 0, tds = '';
+    for (let d = 1; d <= days; d++) {
+      const ds = `${mo}-${String(d).padStart(2, '0')}`, e = cell[ps + '|' + ds];
+      let ch = '·', col = 'var(--text3)', tip = '会計なし・記録なし', bg = '';
+      if (e && e.posN > 0) {
+        any++;
+        if (e.logSum === 0) { ch = '未'; col = '#fff'; bg = 'var(--danger)'; tip = `未読み取り: お会計 ${e.posN}件 ${yen(e.posSum)}`; un.push(d); unAmt += e.posSum; }
+        else if (e.logSum === e.posSum) { ch = '✓'; col = 'var(--ok)'; tip = `一致: ${yen(e.posSum)}(記録${e.logN}枚)`; }
+        else { ch = '△'; col = 'var(--warn)'; tip = `差額あり: 記録 ${yen(e.logSum)} / お会計 ${yen(e.posSum)}`; }
+      } else if (e && e.logN > 0) {
+        if (last == null || ds > last) { ch = '○'; col = 'var(--text2,#aab)'; tip = `記録${e.logN}枚(お会計は未取込)`; }
+        else { ch = '記'; col = 'var(--warn)'; tip = `記録${e.logN}枚あるが、その日のお会計がありません`; }
+      }
+      tds += `<td title="${escH(sn + ' ' + ds + ' ' + tip)}" style="text-align:center;padding:3px 2px;font-size:0.72rem;font-weight:700;color:${col};${bg ? 'background:' + bg + ';border-radius:4px' : ''}">${ch}</td>`;
+    }
+    totalUn += un.length; totalAmt += unAmt;
+    const state = any === 0 ? '<span style="color:var(--text3)">会計なし</span>' : (un.length === 0 ? '<span style="color:var(--ok)">すべて読み取り済み</span>' : `<b style="color:var(--danger)">${un.length}日 / ${yen(unAmt)}</b>`);
+    return `<tr><td style="white-space:nowrap;position:sticky;left:0;background:var(--bg2,#121a2b)">${escH(sn)}</td>${tds}<td style="text-align:right;white-space:nowrap">${state}</td><td style="font-size:0.75rem;min-width:140px">${un.length ? M + '/' + un.join('、') : ''}</td></tr>`;
+  }).join('');
+  box.innerHTML = `<div class="hint"><b>${Y}年${M}月</b>:未読み取りの日は、全体で <b style="color:var(--danger)">${totalUn}日分 / ${yen(totalAmt)}</b>。 ✓=お会計と一致 / △=差額あり / <span style="color:var(--danger);font-weight:700">未</span>=会計あり・記録なし / ○=記録あり(お会計は未取込) / 記=記録はあるが会計なし / ·=なし。マスにカーソルを置くと詳細が出ます。</div>` +
+    `<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr>${head}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 }
 function renderStoreAgg() {
   const box = document.getElementById('store-agg');
@@ -1318,6 +1375,7 @@ function renderStoreView() {
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${all.filter(r => r.pos === 'ok').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計なし(要確認)</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${all.filter(r => r.pos === 'none').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計データ未取込</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${all.filter(r => r.pos === 'nodata').length}件</div></div>`;
+  renderStoreCoverage();
   renderStoreAgg();
   renderStorePosOnly();
   const rows = sortRowsBy(storeFilteredRows(), 'store');
@@ -1997,9 +2055,9 @@ function showDetail(ticketNumber) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
         <input type="text" class="edit-input" id="edit-new-ticket" placeholder="例: A0041701(数字だけの券は 12)" maxlength="8" style="max-width:200px;font-family:monospace;text-transform:uppercase" oninput="togglePlatSelect()">
         <select class="edit-input" id="edit-new-face" style="max-width:260px">
-          <option value="">額面は券番号の頭文字で自動(A/B/C/P)</option>
-          <option value="5040">N券 60分(5,040円)</option>
+          <option value="">額面は券番号の頭文字で自動(A/B/C/P/M。Nは90分)</option>
           <option value="7560">N券 90分(7,560円)</option>
+          <option value="5040">N券 60分(5,040円)</option>
         </select>
       </div>
       <div id="edit-plat-wrap" style="display:none;margin-top:8px;padding:8px;background:#ffedd5;border-radius:6px">
@@ -2037,10 +2095,10 @@ function showDetail(ticketNumber) {
   document.getElementById('modal').classList.add('open');
 }
 
-const TICKET_COURSE = { A: ['A(60min)', 15840], B: ['B(100min)', 26400], C: ['C(120min)', 31680], P: ['P(ペントハウス2.5h)', 90000], N: ['N(マグマルーム90分)', null], D: ['プラチナムペント 4時間(2名様用)', 194000] };
+const TICKET_COURSE = { A: ['A(60min)', 15840], B: ['B(100min)', 26400], C: ['C(120min)', 31680], P: ['P(ペントハウス2.5h)', 90000], M: ['M(マグマルーム60分)', 5040], N: ['N(マグマルーム90分)', 7560], D: ['プラチナムペント 4時間(2名様用)', 194000] };
 // 4時間コース(2名様用)は、アルファベットなしの 1〜99 の数字だけ
 const isNumOnlyTicket = (t) => /^[0-9]{1,2}$/.test(String(t || ''));
-function isUnread(r) { return !!r && (String(r.ticket_number || '').startsWith('UNREAD-') || (r.judgment === '読取不能' && !/^[ABCPN][0-9]{7}$/.test(r.ticket_number || '') && !isNumOnlyTicket(r.ticket_number))); }
+function isUnread(r) { return !!r && (String(r.ticket_number || '').startsWith('UNREAD-') || (r.judgment === '読取不能' && !/^[ABCPNM][0-9]{7}$/.test(r.ticket_number || '') && !isNumOnlyTicket(r.ticket_number))); }
 
 function togglePlatSelect() {
   const v = (document.getElementById('edit-new-ticket').value || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim();
@@ -2051,7 +2109,7 @@ function togglePlatSelect() {
 async function saveUnreadTicketNo(r, fields) {
   let raw = (document.getElementById('edit-new-ticket').value || '').toUpperCase().replace(/[\s\-－]/g, '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
   if (/^[0-9]{1,2}$/.test(raw)) raw = String(parseInt(raw, 10)); // 4時間コース(2名様用):アルファベットなしの数字
-  if (!/^[ABCPN][0-9]{7}$/.test(raw) && !(/^[0-9]{1,2}$/.test(raw) && raw !== '0')) { showToast('券番号は「A」「B」「C」「P」「N」+数字7桁、または4時間コースの数字(1〜99)で入力してください', 'error'); return false; }
+  if (!/^[ABCPNM][0-9]{7}$/.test(raw) && !(/^[0-9]{1,2}$/.test(raw) && raw !== '0')) { showToast('券番号は「A」「B」「C」「P」「N」「M」+数字7桁、または4時間コースの数字(1〜99)で入力してください', 'error'); return false; }
   if (allData.some(d => d.ticket_number === raw)) { showToast(`${raw} はすでに登録されています。同じ券の二重登録でないか確認してください`, 'error'); return false; }
   const kind = isNumOnlyTicket(raw) ? 'D' : raw[0];
   if (kind === 'D' && document.getElementById('edit-plat').value !== '194000') { showToast('アルファベットのない番号は、プラチナムペントの券かどうかを、選んでください', 'error'); return false; }
