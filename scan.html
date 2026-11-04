@@ -261,9 +261,9 @@ const STORES = [
   'PENTHOUSE 西麻布','PANTHEON白金台プラチナム','PANTHEON赤坂','PANTHEON西麻布','PANTHEON西梅田',
   'PANTHEON西中洲','PANTHEON新宿','PANTHEON心斎橋','PANTHEON銀座並木通り','PANTHEON京都祇園'
 ];
-const PRICE = { A:15840, B:26400, C:31680, P:90000, N:5040 };
-const COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', N:'N(マグマルーム)' };
-const TICKET_RE = /^([ABCPN][0-9]{7}|[1-9][0-9]?)$/;   // A/B/C/P/N+数字7桁、または アルファベットなしの 1〜99(プラチナムペントの券)
+const PRICE = { A:15840, B:26400, C:31680, P:90000, M:5040, N:7560 };   // M=マグマルーム60分、N=マグマルーム90分(Nは、60分の券なら選び直せる)
+const COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', M:'M(マグマルーム60分)', N:'N(マグマルーム90分)' };
+const TICKET_RE = /^([ABCPNM][0-9]{7}|[1-9][0-9]?)$/;   // A/B/C/P/N/M+数字7桁、または アルファベットなしの 1〜99(プラチナムペントの券)
 const isNumOnly = (t) => /^[1-9][0-9]?$/.test(t || '');
 const PLAT_LABEL = 'プラチナムペント 4時間コース【2名様用】(¥194,000)';
 const PLAT_AMOUNT = 194000;
@@ -364,7 +364,7 @@ function setTicket(v, method, fromInput) {
 function expectedAmount() {
   const t = normalizeTicket($('ticket').value);
   let face = TICKET_RE.test(t) ? PRICE[t[0]] : null;
-  if (t[0] === 'N') face = Number($('n-course').value) || null;   // マグマルームは60分/90分を選ぶ
+  if (t[0] === 'N') face = Number($('n-course').value) || 7560;   // Nはマグマルーム90分(60分の券なら選び直す)。Mは60分で固定
   if (isNumOnly(t)) face = Number($('p-course').value) || null;   // アルファベットなしは、プラチナムペントを選ぶ
   if (!face) return null;
   return $('staff-disc').checked ? Math.round(face * 0.8) : face;
@@ -372,7 +372,7 @@ function expectedAmount() {
 function updateExpect() {
   const isN = normalizeTicket($('ticket').value)[0] === 'N' && TICKET_RE.test(normalizeTicket($('ticket').value));
   $('n-wrap').classList.toggle('hidden', !isN);
-  if (!isN) $('n-course').value = '';
+  if (!isN) $('n-course').value = ''; else if (!$('n-course').value) $('n-course').value = '7560';
   const isP = isNumOnly(normalizeTicket($('ticket').value));
   $('p-wrap').classList.toggle('hidden', !isP);
   if (!isP) $('p-course').value = '';
@@ -416,7 +416,7 @@ async function runCheck() {
     nodes.push(el('div', { className: 'msg ok', textContent: 'アルファベットのない番号です。プラチナムペントの券なら、上で選んでください(発券データとは照合しません)。' }));
   } else if (issued) {
     nodes.push(el('div', { className: 'msg ok', textContent:
-      `✓ 発券済みの券です:${COURSE[head] || issued.course || head}(額面 ${head === 'N' ? '¥5,040(60分)または ¥7,560(90分)' : '¥' + (PRICE[head] || 0).toLocaleString()})` +
+      `✓ 発券済みの券です:${COURSE[head] || issued.course || head}(額面 ${head === 'N' ? '¥7,560(90分。60分の券なら、下で選び直してください)' : '¥' + (PRICE[head] || 0).toLocaleString()})` +
       (issued.destination ? ` / 発券先:${issued.destination}` : '') }));
   } else {
     nodes.push(el('div', { className: 'msg warn', textContent: '⚠ 発券データに見つからない番号です。打ち間違いがないか確認してください。' }));
@@ -449,7 +449,8 @@ function buildRow() {
   const notes = [];
   if (!checked.issued) notes.push('発券データなし');
   if (checked.dup) notes.push('重複の確認済み');
-  if (t[0] === 'N') notes.push($('n-course').value === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
+  if (t[0] === 'M') notes.push('マグマルーム60分');
+  if (t[0] === 'N') notes.push($('n-course').value === '5040' ? 'マグマルーム60分' : 'マグマルーム90分');
   if (isNumOnly(t)) notes.push('プラチナムペント 4時間(2名様用)');
   return {
     ticket_number: t, store_name: $('store').value, used_date: $('used-date').value,
@@ -707,7 +708,7 @@ async function tilePass(file, worker, area) {
         if (/^[0-9]{7}$/.test(d)) nums.add(d);
       }
       const variants = [];
-      nums.forEach(d => ['A', 'B', 'C', 'P', 'N'].forEach(l => variants.push(l + d)));
+      nums.forEach(d => ['A', 'B', 'C', 'P', 'N', 'M'].forEach(l => variants.push(l + d)));
       if (variants.length) {
         const ok = await filterIssued(variants);     // 発券データにある番号だけ採用
         if (ok.length) return ok;
@@ -745,7 +746,7 @@ function toCanvas(file, maxSide) {
 function extractCandidates(text) {
   const out = new Set();
   const t = (text || '').toUpperCase();
-  const re = /([ABCPN])[\s\-]?([0-9OIlSB]{7})/g;
+  const re = /([ABCPNM])[\s\-]?([0-9OIlSB]{7})/g;
   let m;
   while ((m = re.exec(t)) !== null) {
     const after = t.charAt(re.lastIndex);
@@ -836,6 +837,7 @@ function rowReady(r) {
 function refreshRow(r) {
   const e = r.e;
   const isN = r.ticket[0] === 'N' && TICKET_RE.test(r.ticket);
+  if (isN && !r.ncourse) { r.ncourse = '7560'; e.nsel.value = '7560'; }   // Nは、ふつう90分
   e.nwrap.classList.toggle('hidden', !isN);
   e.pwrap.classList.toggle('hidden', !isNumOnly(r.ticket));
   let kind = 'ok', text = '';
@@ -845,7 +847,7 @@ function refreshRow(r) {
   else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
   else if (r.dupInList) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります(重複のため、記録できません)'; }
   else if (isNumOnly(r.ticket) && !r.pcourse) { kind = 'warn'; text = 'アルファベットのない番号です。プラチナムペントの券なら、下で選んでください。'; }
-  else if (isN && !r.ncourse) { kind = 'warn'; text = 'マグマルームです。60分か90分かを選んでください。'; }
+  else if (isN && r.ncourse === '5040') { kind = 'warn'; text = 'N券は、ふつうマグマルーム90分(¥7,560)です。60分(¥5,040)に変えています。写真と見比べてください。'; }
   else if (!r.date) { kind = 'warn'; text = '利用日を入れてください。(今日の日付の写真は、パソコンに保存した日の可能性があるため、空にしています。上の「全部の利用日を、この日にする」も使えます)'; }
   else if (!r.dateOk) { kind = 'warn'; text = '利用日を、写真と見比べて、「日付OK」にチェックしてください。(最初の日付は、写真の日付を仮に入れています)'; }
   else {
@@ -979,7 +981,8 @@ $('btn-batch-save').addEventListener('click', () => {
       const photoPath = up.path;
       const notes = [];
       if (r.issued === false) notes.push('発券データなし');
-      if (r.ticket[0] === 'N') notes.push(r.ncourse === '7560' ? 'マグマルーム90分' : 'マグマルーム60分');
+      if (r.ticket[0] === 'M') notes.push('マグマルーム60分');
+      if (r.ticket[0] === 'N') notes.push(r.ncourse === '5040' ? 'マグマルーム60分' : 'マグマルーム90分');
       if (isNumOnly(r.ticket)) notes.push('プラチナムペント 4時間(2名様用)');
       notes.push('まとめて記録');
       payload.push({ photo_path: photoPath, ticket_number: r.ticket, store_name: $('store').value, used_date: r.date, input_method: r.method, note: notes.join(' / '),
