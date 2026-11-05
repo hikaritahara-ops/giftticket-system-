@@ -567,15 +567,16 @@ $('p-course').addEventListener('change', () => { $('confirm-box').replaceChildre
 $('staff-disc').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateExpect(); });
 
 /* 最近の記録 */
-// 日付ごとの合計(この店舗・直近14日分の利用日)。お会計の合計と見比べるため
+// 日付ごとの合計(この店舗・今月と先月の利用日)。お会計の合計と見比べるため
 async function loadDayTotals() {
   const box = $('day-totals');
   if (!box) return;
-  const from = new Date(Date.now() + 9 * 3600 * 1000 - 14 * 86400000).toISOString().slice(0, 10);
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);   // 先月の1日から(今月と先月のぶん)
+  const from = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() - 1, 1)).toISOString().slice(0, 10);
   const { data, error } = await sb.from('usage_log').select('used_date,expected_amount')
     .eq('store_name', $('store').value).gte('used_date', from).order('used_date', { ascending: false }).limit(1000);
   if (error) { box.replaceChildren(); return; }
-  if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '直近14日の記録は、まだありません。' })); return; }
+  if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '今月・先月の記録は、まだありません。' })); return; }
   const g = new Map();
   data.forEach(r => {
     const d = String(r.used_date).slice(0, 10);
@@ -596,14 +597,15 @@ async function loadRecent() {
   loadDayTotals();
   const ul = $('recent');
   const { data, error } = await sb.from('usage_log')
-    .select('id,ticket_number,used_date,created_at,created_by')
+    .select('id,ticket_number,used_date,created_at,created_by,expected_amount')
     .eq('store_name', $('store').value)
     .order('created_at', { ascending: false }).limit(15);
   if (error) { ul.replaceChildren(el('li', { textContent: '読み込めませんでした' })); return; }
   if (!data.length) { ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' })); return; }
   ul.replaceChildren(...data.map(r => {
     return el('li', {}, [
-      el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })])
+      el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })]),
+      el('span', { style: 'font-weight:700;margin-left:auto;padding-left:12px;white-space:nowrap', textContent: r.expected_amount != null ? '¥' + Number(r.expected_amount).toLocaleString() : '金額なし' })
     ]);
   }));
 }
@@ -632,25 +634,7 @@ const onPhoto = async (ev) => {
   showMsg(area, 'ok', '読み取り中...(初回は少し時間がかかります)');
   try {
     const worker = await getWorker();
-    const votes = new Map();                       // 番号 → 何回読めたか
-    const sizes = [1000, 800, 1200, 1600, 2400];   // 大きさを変えて読む(速い、小さい大きさから)
-    let valid = [];                                // 発券データにある番号
-    for (let k = 0; k < sizes.length; k++) {
-      showMsg(area, 'ok', `読み取り中...(${k + 1}/${sizes.length})`);
-      const canvas = await toCanvas(f, sizes[k]);
-      const { data } = await worker.recognize(canvas);
-      extractCandidates(data.text || '').forEach(c => votes.set(c, (votes.get(c) || 0) + 1));
-      if (votes.size) {
-        valid = await filterIssued([...votes.keys()]);
-        // 発券データにある番号が、1つだけ見つかって、2回以上読めていれば、そこで終了
-        if (valid.length === 1 && votes.get(valid[0]) >= 2) break;
-      }
-    }
-    // 券全体を遠くから撮ったときなど、番号が小さくて読めない場合:写真を小さく区切って、1か所ずつ大きくして読む
-    if (valid.length === 0) {
-      const tv = await tilePass(f, worker, area);
-      tv.forEach(c => { votes.set(c, (votes.get(c) || 0) + 1); if (!valid.includes(c)) valid.push(c); });
-    }
+    const { votes, valid } = await giftVotes(f, worker, area, (m) => showMsg(area, 'ok', m));
     const all = [...votes.keys()];
     if (!all.length) {
       showMsg(area, 'warn', '番号が読み取れませんでした。券番号の部分を、少し大きく、まっすぐ写して、もう一度撮ってください。(それでも読めないときは、下の「手で入力する」を使えます)');
@@ -683,13 +667,89 @@ const onPhoto = async (ev) => {
 };
 $('cam-file').addEventListener('change', onPhoto);
 $('pick-file').addEventListener('change', onPhoto);
+
+// ===== ギフトチケットの読み取り本体(onPhoto と ocrOne の共通) =====
+// 1) 券(明るい紙)の範囲を見つけて、そこだけを大きくして読む(下の番号の帯 → 券全体)
+// 2) だめなら、全体を大きさを変えて読む(券が見つかっているときは2回だけ)
+// 3) それでもだめなら、券の範囲(見つからなければ全体)を区切って読む。券が見つかっているときは、数か所だけ
+async function ticketRect(file) {
+  const c = await toCanvas(file, 300), W = c.width, H = c.height;
+  const px = c.getContext('2d').getImageData(0, 0, W, H).data, g = new Uint8Array(W * H), hist = new Array(256).fill(0);
+  for (let i = 0; i < W * H; i++) { const v = Math.round(.299 * px[i * 4] + .587 * px[i * 4 + 1] + .114 * px[i * 4 + 2]); g[i] = v; hist[v]++; }
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let wB = 0, sB = 0, best = 0, th = 128;
+  for (let t = 0; t < 256; t++) { wB += hist[t]; if (!wB) continue; const wF = W * H - wB; if (!wF) break; sB += t * hist[t]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF); if (v > best) { best = v; th = t; } }
+  const m = new Uint8Array(W * H); for (let i = 0; i < W * H; i++) m[i] = g[i] > th ? 1 : 0;
+  const seen = new Uint8Array(W * H), st = new Int32Array(W * H); let bb = null, bn = 0;
+  for (let s0 = 0; s0 < W * H; s0++) {
+    if (!m[s0] || seen[s0]) continue;
+    let sp = 0, n = 0, x0 = W, y0 = H, x1 = 0, y1 = 0; st[sp++] = s0; seen[s0] = 1;
+    while (sp) {
+      const q0 = st[--sp], x = q0 % W, y = (q0 - x) / W; n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const q = ny * W + nx; if (m[q] && !seen[q]) { seen[q] = 1; st[sp++] = q; }
+      }
+    }
+    if (n > bn) { bn = n; bb = [x0, y0, x1, y1]; }
+  }
+  if (!bb) return null;
+  const area = (bb[2] - bb[0] + 1) * (bb[3] - bb[1] + 1) / (W * H);
+  if (area < 0.05 || area > 0.92) return null;
+  const x = Math.max(0, bb[0] / W - 0.03), y = Math.max(0, bb[1] / H - 0.04), x2 = Math.min(1, (bb[2] + 1) / W + 0.03), y2 = Math.min(1, (bb[3] + 1) / H + 0.04);
+  return { x, y, w: x2 - x, h: y2 - y };
+}
+function cropCanvas(big, r, fy, fh, side) {      // 券の範囲 r のうち、縦 fy〜fy+fh の部分を、長い辺 side で切り出す
+  const sx = Math.round(big.width * r.x), sy = Math.round(big.height * (r.y + r.h * fy));
+  const sw = Math.round(big.width * r.w), sh = Math.round(big.height * r.h * fh);
+  const sc = side / Math.max(sw, sh), c = document.createElement('canvas');
+  c.width = Math.round(sw * sc); c.height = Math.round(sh * sc);
+  c.getContext('2d').drawImage(big, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+async function giftVotes(file, worker, area, prog) {
+  const votes = new Map(); let valid = [];
+  const add = async (text) => {
+    extractCandidates(text || '').forEach(c => votes.set(c, (votes.get(c) || 0) + 1));
+    if (votes.size) valid = await filterIssued([...votes.keys()]);
+    return valid.length === 1 && votes.get(valid[0]) >= 2;       // 発券データにある番号が1つで、2回読めたら終わり
+  };
+  let rect = null;
+  try { rect = await ticketRect(file); } catch (e) { rect = null; }
+  if (rect) {
+    if (prog) prog('券の番号を、大きくして読んでいます...');
+    const big = await toCanvas(file, 3000);
+    const plan = [[0.6, 0.4, 1600, '6'], [0.6, 0.4, 1600, '11'], [0, 1, 2000, '11']];   // 下の番号の帯 → 券全体
+    try {
+      for (const [fy, fh, side, psm] of plan) {
+        await worker.setParameters({ tessedit_pageseg_mode: psm });
+        const { data } = await worker.recognize(cropCanvas(big, rect, fy, fh, side));
+        if (await add(data.text)) return { votes, valid, rect };
+      }
+    } finally { await worker.setParameters({ tessedit_pageseg_mode: '11' }); }
+  }
+  const sizes = rect ? [1000, 1600] : [1000, 800, 1200, 1600, 2400];      // 速い(小さい)大きさから
+  for (let k = 0; k < sizes.length; k++) {
+    if (prog) prog(`読み取り中...(${k + 1}/${sizes.length})`);
+    const { data } = await worker.recognize(await toCanvas(file, sizes[k]));
+    if (await add(data.text)) return { votes, valid, rect };
+  }
+  if (!valid.length) {
+    const tv = await tilePass(file, worker, area, rect);
+    tv.forEach(c => { votes.set(c, (votes.get(c) || 0) + 1); if (!valid.includes(c)) valid.push(c); });
+  }
+  return { votes, valid, rect };
+}
 // 写真を区切って(横40%×縦30%、半分ずつずらす)大きくして読む。真ん中から順に読み、発券データにある番号が見つかった時点で終了
-async function tilePass(file, worker, area) {
-  const big = await toCanvas(file, 3000);
+async function tilePass(file, worker, area, rect) {
+  let big = await toCanvas(file, 3000);
+  if (rect) big = cropCanvas(big, rect, 0, 1, 3000);       // 券の範囲だけを区切る
   const W = big.width, H = big.height, tw = 0.4, th = 0.3;
   const tiles = [];
   for (let x = 0; x + tw <= 1.0001; x += tw / 2) for (let y = 0; y + th <= 1.0001; y += th / 2) tiles.push([x, y]);
   tiles.sort((a, b) => (Math.abs(a[0] + tw / 2 - 0.5) + Math.abs(a[1] + th / 2 - 0.5)) - (Math.abs(b[0] + tw / 2 - 0.5) + Math.abs(b[1] + th / 2 - 0.5)));
+  if (rect) tiles.length = Math.min(tiles.length, 8);       // 券が見つかっているときは、真ん中に近い数か所だけ(読めないときに、早くあきらめる)
   await worker.setParameters({ tessedit_pageseg_mode: '6' });
   try {
     for (let i = 0; i < tiles.length; i++) {
@@ -798,20 +858,7 @@ function amountFor(t, ncourse, staff, pcourse) {
 }
 async function ocrOne(file, area) {
   const worker = await getWorker();
-  const votes = new Map(); let valid = [];
-  for (const size of [1000, 800, 1200, 1600, 2400]) {      // 速い(小さい)大きさから読む。発券データにある番号で、2回読めたら終わり
-    const canvas = await toCanvas(file, size);
-    const { data } = await worker.recognize(canvas);
-    extractCandidates(data.text || '').forEach(c => votes.set(c, (votes.get(c) || 0) + 1));
-    if (votes.size) {
-      valid = await filterIssued([...votes.keys()]);
-      if (valid.length === 1 && votes.get(valid[0]) >= 2) break;
-    }
-  }
-  if (!valid.length) {
-    const tv = await tilePass(file, worker, area);
-    tv.forEach(c => { votes.set(c, (votes.get(c) || 0) + 1); if (!valid.includes(c)) valid.push(c); });
-  }
+  const { votes, valid } = await giftVotes(file, worker, area, null);
   const all = [...votes.keys()];
   if (!all.length) return '';
   all.sort((a, b) => (valid.includes(b) - valid.includes(a)) || (votes.get(b) - votes.get(a)));
@@ -852,8 +899,9 @@ function refreshRow(r) {
   else if (!r.dateOk) { kind = 'warn'; text = '利用日を、写真と見比べて、「日付OK」にチェックしてください。(最初の日付は、写真の日付を仮に入れています)'; }
   else {
     const amt = amountFor(r.ticket, r.ncourse, r.staff, r.pcourse);
-    kind = r.issued === false ? 'warn' : 'ok';
-    text = (r.issued === false ? '⚠ 発券データに無い番号です(N券は、現在データがありません)。 ' : '✓ ') + (amt != null ? `想定金額 ¥${amt.toLocaleString()}` + (r.staff ? '(スタッフ割)' : '') : '');
+    kind = (r.issued === false && !/^[MN]/.test(r.ticket || '')) ? 'warn' : 'ok';
+    const mn = /^[MN]/.test(r.ticket || '');
+    text = (r.issued === false ? (mn ? `ℹ ${r.ticket[0]}券(マグマルーム${r.ticket[0] === 'M' ? '60分' : '90分'})は、発券データがありません。番号の1文字目(MかN)と数字を、写真と見比べてください。 ` : '⚠ 発券データに無い番号です。 ') : '✓ ') + (amt != null ? `想定金額 ¥${amt.toLocaleString()}` + (r.staff ? '(スタッフ割)' : '') : '');
   }
   e.st.className = 'st ' + kind; e.st.textContent = text;
 }
@@ -1298,10 +1346,11 @@ async function loadYutaiTotals() {
   const box = $('y-totals'), ul = $('y-recent');
   if (!box) return;
   const store = $('y-store').value;
-  const from = new Date(Date.now() + 9 * 3600 * 1000 - 14 * 86400000).toISOString().slice(0, 10);
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);   // 先月の1日から(今月と先月のぶん)
+  const from = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() - 1, 1)).toISOString().slice(0, 10);
   const { data, error } = await sb.from('yutai_usage_log').select('used_date').eq('store_name', store).gte('used_date', from).order('used_date', { ascending: false }).limit(1000);
   if (error) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '読み込めませんでした' })); }
-  else if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '直近14日の記録は、まだありません。' })); }
+  else if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '今月・先月の記録は、まだありません。' })); }
   else {
     const g = new Map();
     data.forEach(r => { const d = String(r.used_date).slice(0, 10); g.set(d, (g.get(d) || 0) + 1); });
