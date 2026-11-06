@@ -403,10 +403,9 @@ async function runCheck() {
   const out = $('check-area');
   if (!TICKET_RE.test(t)) { out.replaceChildren(); updateButton(); return; }
   out.replaceChildren(el('div', { className: 'msg', textContent: '確認中...' }));
-  const [issuedR, logR, matchR] = await Promise.all([
+  const [issuedR, logR] = await Promise.all([
     sb.from('issued_tickets').select('course,issued_date,destination').eq('ticket_number', t).limit(1),
-    sb.from('usage_log').select('store_name,used_date').eq('ticket_number', t).order('used_date', { ascending: false }).limit(3),
-    sb.from('matching_results').select('store_name,used_date,used_date_confirmed').eq('ticket_number', t).limit(1)
+    sb.from('usage_log').select('store_name,used_date').eq('ticket_number', t).order('used_date', { ascending: false }).limit(3)
   ]);
   if ($('ticket').value !== t) return; // 入力が変わっていたら捨てる
   const nodes = [];
@@ -420,8 +419,6 @@ async function runCheck() {
   }
   const dups = [];
   (logR.data || []).forEach(r => dups.push(`${r.used_date} ${r.store_name}`));
-  const m = matchR.data && matchR.data[0];
-  if (m) dups.push(`${m.used_date_confirmed || m.used_date || '日付不明'} ${m.store_name || ''}(旧システム)`);
   let needConfirm = !issued && !isNumOnly(t) && !(head === 'M' || head === 'N');
   if (dups.length) {
     needConfirm = true;
