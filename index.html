@@ -553,11 +553,11 @@
 </header>
 
 <nav class="main-nav">
-  <button class="main-nav-tab active" data-page="page-dashboard" onclick="switchPage('page-dashboard', this)">📋 照合結果【利用停止中】</button>
-  <button class="main-nav-tab" data-page="page-pos" onclick="switchPage('page-pos', this)">💳 POS取り込み</button>
-  <button class="main-nav-tab" data-page="page-ticket" onclick="switchPage('page-ticket', this)">🎟 発券データ取り込み</button>
+  <button class="main-nav-tab" data-page="page-dashboard" onclick="switchPage('page-dashboard', this)">📋 照合結果【利用停止中】</button>
   <button class="main-nav-tab" data-page="page-sold" onclick="switchPage('page-sold', this)">🛒 販売データ取り込み</button>
-  <button class="main-nav-tab" data-page="page-store" onclick="switchPage('page-store', this)">🏪 店舗の記録</button>
+  <button class="main-nav-tab" data-page="page-ticket" onclick="switchPage('page-ticket', this)">🎟 発券データ取り込み</button>
+  <button class="main-nav-tab" data-page="page-pos" onclick="switchPage('page-pos', this)">💳 POS取り込み</button>
+  <button class="main-nav-tab active" data-page="page-store" onclick="switchPage('page-store', this)">🏪 ギフチケカメラ</button>
   <button class="main-nav-tab" data-page="page-yutai" onclick="switchPage('page-yutai', this)">🎁 優待券</button>
 </nav>
 
@@ -579,10 +579,10 @@
   </div>
 
   <!-- ============ ページ1: 照合結果ダッシュボード ============ -->
-  <div class="page active" id="page-dashboard">
+  <div class="page" id="page-dashboard">
 
     <div style="margin:0 0 14px;padding:12px 16px;border:1px solid var(--warn,#d9822b);border-radius:10px;background:rgba(245,158,11,0.10);font-size:0.9rem;line-height:1.6">
-      <b>【利用停止中】</b> この「照合結果」は、旧システム(n8n)の読み取り結果です。現在は使っていません。いまの記録は、「店舗の記録」(チケットカメラ)で確認してください。
+      <b>【利用停止中】</b> この「照合結果」は、旧システム(n8n)の読み取り結果です。現在は使っていません。いまの記録は、「ギフチケカメラ」タブで確認してください。
     </div>
 
     <div class="stats-grid" id="stats-grid">
@@ -799,10 +799,10 @@
 
   </div>
 
-  <!-- ============ ページ5: 店舗の記録(iPadの記録画面で溜まった券) ============ -->
-  <div class="page" id="page-store">
+  <!-- ============ ページ5: ギフチケカメラの記録(iPadの記録画面で溜まった券) ============ -->
+  <div class="page active" id="page-store">
     <div class="card">
-      <h2><div class="left">店舗の記録(iPadで、店舗が記録した券)</div></h2>
+      <h2><div class="left">ギフチケカメラ(店舗が記録した券)</div></h2>
       <div class="hint">店舗が記録画面で記録した券の一覧です。表の見出し(記録日時・店舗・券番号・利用日など)を押すと、その順に並べ替えられます(もう一度押すと逆順)。お会計(POS)データと、店舗・利用日・金額で突合します。AI(Gemini)の読取結果(照合結果)とは、ここでは突合しません。券の写真は、右端の「📷 見る」で見られます。「⬇ 保存」で、その写真だけを保存できます(店舗へ送るときに便利です)。まとめて保存するときは、上の「📷 写真をまとめて保存(ZIP)」を使います。</div>
       <div id="store-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0"></div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
@@ -823,13 +823,13 @@
       <div class="hint">「Excelで出力」は、いま表示している条件(店舗・利用月・突合・券番号)の記録を出力します。「全件」シートと、店舗ごとのシートに分かれます。「写真をまとめて保存」は、同じ条件の券の写真を、店舗ごとのフォルダに分けたZIPで保存します(月末のバックアップにも使えます)。</div>
       <div id="store-view-body"></div>
       <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">読み取り状況(どの店舗の、いつの分が、まだ読み取られていないか)</h3>
-      <div class="hint">お会計(POS)にチケットの会計がある日のうち、店舗の記録がまだない日が <b style="color:var(--danger)">未</b> です。右の「未読み取りの日」に、日付を並べています。上の「利用月」で月を切り替えられます(「すべて」のときは、最新の月)。</div>
+      <div class="hint">お会計(POS)にチケットの会計がある日のうち、ギフチケカメラの記録がまだない日が <b style="color:var(--danger)">未</b> です。右の「未読み取りの日」に、日付を並べています。上の「利用月」で月を切り替えられます(「すべて」のときは、最新の月)。</div>
       <div id="store-coverage"></div>
-      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(店舗の記録 と お会計データ)</h3>
-      <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。店舗の記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
+      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">店舗・日付ごとの合計の突合(ギフチケカメラの記録 と お会計データ)</h3>
+      <div class="hint">お客様名がないため、「店舗」「利用日」「金額」の<b>合計</b>で突き合わせます。ギフチケカメラの記録の想定金額の合計と、お会計データのうち券の金額(スタッフ割の金額も含む)の会計の合計が、一致すれば「一致」です。違えば「差額」が出ます。</div>
       <div id="store-agg"></div>
-      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">お会計はあるが、店舗の記録がない(候補)</h3>
-      <div class="hint">お会計データに、券の金額(スタッフ割の金額も含む)と同じ会計があり、店舗の記録と結びつかなかったものです。まだ記録していない券や、同じ金額の別の会計も含まれるので、「候補」として見てください。</div>
+      <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">お会計はあるが、ギフチケカメラの記録がない(候補)</h3>
+      <div class="hint">お会計データに、券の金額(スタッフ割の金額も含む)と同じ会計があり、ギフチケカメラの記録と結びつかなかったものです。まだ記録していない券や、同じ金額の別の会計も含まれるので、「候補」として見てください。</div>
       <div id="store-pos-only"></div>
     </div>
   </div>
@@ -994,7 +994,7 @@ function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-root').style.display = 'block';
   document.getElementById('user-email').textContent = currentSession.user.email;
-  loadData();
+  if (!storeViewLoaded) loadStoreView();      // 最初に開く画面は「ギフチケカメラ」
 }
 
 async function doLogin() {
@@ -1055,11 +1055,13 @@ function switchPage(pageId, btn) {
   if (pageId === 'page-ticket' && !ticketViewLoaded) loadTicketStoreView();
   if (pageId === 'page-sold' && !soldViewLoaded) loadSoldView();
   if (pageId === 'page-store' && !storeViewLoaded) loadStoreView();
+  if (pageId === 'page-dashboard' && !dashViewLoaded) { dashViewLoaded = true; loadData(); }
   if (pageId === 'page-yutai' && !yutaiLoaded) loadYutaiView();
 }
 
-// ============ 店舗の記録(usage_log)と、写真の読み取り結果を並べる ============
+// ============ ギフチケカメラの記録(usage_log)と、写真の読み取り結果を並べる ============
 let storeViewLoaded = false;
+let dashViewLoaded = false;
 let storeRows = [];
 function escH(v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1229,7 +1231,7 @@ function exportStoreExcel() {
   const names = [...new Set(sorted.map(r => r.log.store_name).filter(Boolean))];
   names.forEach(n => add(n, sorted.filter(r => r.log.store_name === n)));
   const mo = document.getElementById('store-filter-month').value || 'all';
-  XLSX.writeFile(wb, `店舗の記録_${mo}.xlsx`);
+  XLSX.writeFile(wb, `ギフチケカメラの記録_${mo}.xlsx`);
   showToast('Excelを出力しました', 'success');
 }
 function renderStoreCoverage() {
@@ -1304,7 +1306,7 @@ function renderStoreAgg() {
     const e = get(p.store_name, d); e.posSum += Number(p.sales_amount); e.posN++;
   });
   let list = [...g.values()].filter(e => (!fs || rev[e.ps] === fs) && (!fmo || e.d.slice(0, 7) === fmo));
-  // 店舗の記録が全くない日で、お会計だけある日は、記録の入力が進んでいない可能性が高いので、記録のある店舗の分だけ出す
+  // ギフチケカメラの記録が全くない日で、お会計だけある日は、記録の入力が進んでいない可能性が高いので、記録のある店舗の分だけ出す
   const loggedStores = new Set(storeRows.map(r => STORE_POS_MAPPING[r.log.store_name]).filter(Boolean));
   list = list.filter(e => loggedStores.has(e.ps));
   if (!list.length) { box.innerHTML = '<div class="hint">該当するデータがありません。</div>'; return; }
@@ -1319,8 +1321,8 @@ function renderStoreAgg() {
   list.forEach(e => cnt[st(e)]++);
   const sumLog = list.filter(e => st(e) !== 'nodata').reduce((a, e) => a + e.logSum, 0);
   const sumPos = list.filter(e => st(e) !== 'nodata').reduce((a, e) => a + e.posSum, 0);
-  box.innerHTML = `<div class="hint">一致 ${cnt.ok}日 / 差額あり ${cnt.diff}日 / 記録なし ${cnt.nolog}日 / 未取込 ${cnt.nodata}日。お会計が取り込み済みの日の合計: 店舗の記録 ${yen(sumLog)}、お会計 ${yen(sumPos)}、差額 ${yen(sumPos - sumLog)}</div>` +
-    '<div class="table-scroll"><table><thead><tr><th>日付</th><th>店舗</th><th>店舗の記録(枚数)</th><th>記録の合計</th><th>お会計(件数)</th><th>お会計の合計</th><th>差額(お会計−記録)</th><th>判定</th></tr></thead><tbody>' +
+  box.innerHTML = `<div class="hint">一致 ${cnt.ok}日 / 差額あり ${cnt.diff}日 / 記録なし ${cnt.nolog}日 / 未取込 ${cnt.nodata}日。お会計が取り込み済みの日の合計: ギフチケカメラの記録 ${yen(sumLog)}、お会計 ${yen(sumPos)}、差額 ${yen(sumPos - sumLog)}</div>` +
+    '<div class="table-scroll"><table><thead><tr><th>日付</th><th>店舗</th><th>ギフチケカメラの記録(枚数)</th><th>記録の合計</th><th>お会計(件数)</th><th>お会計の合計</th><th>差額(お会計−記録)</th><th>判定</th></tr></thead><tbody>' +
     list.slice(0, 400).map(e => {
       const s2 = st(e), diff = e.posSum - e.logSum;
       return `<tr><td>${escH(e.d)}</td><td>${escH(rev[e.ps] || e.ps)}</td><td>${e.logN}枚</td><td>${yen(e.logSum)}</td><td>${s2 === 'nodata' ? '-' : e.posN + '件'}</td><td>${s2 === 'nodata' ? '-' : yen(e.posSum)}</td><td style="${s2 === 'diff' ? 'color:var(--danger);font-weight:700' : ''}">${s2 === 'nodata' ? '-' : (diff > 0 ? '+' : '') + diff.toLocaleString()}</td><td>${lab[s2]}</td></tr>`;
@@ -1375,7 +1377,7 @@ function renderStoreView() {
   const fs = document.getElementById('store-filter-store').value;
   const all = storeRows;
   document.getElementById('store-summary').innerHTML =
-    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">店舗の記録</div><div style="font-size:1.4rem;font-weight:700">${all.length}件</div></div>` +
+    `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">ギフチケカメラの記録</div><div style="font-size:1.4rem;font-weight:700">${all.length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計と一致</div><div style="font-size:1.4rem;font-weight:700;color:var(--ok)">${all.filter(r => r.pos === 'ok').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計なし(要確認)</div><div style="font-size:1.4rem;font-weight:700;color:var(--danger)">${all.filter(r => r.pos === 'none').length}件</div></div>` +
     `<div class="stat-card" style="padding:12px 18px;border:1px solid var(--border);border-radius:10px"><div style="font-size:0.72rem;color:var(--text3)">お会計データ未取込</div><div style="font-size:1.4rem;font-weight:700;color:var(--warn)">${all.filter(r => r.pos === 'nodata').length}件</div></div>`;
@@ -1649,7 +1651,7 @@ async function downloadPhotosZip(kind) {
     label = '優待券'; mo = fm || 'all';
   } else {
     rows = storeFilteredRows().map(r => r.log);
-    label = '店舗の記録'; mo = document.getElementById('store-filter-month').value || 'all';
+    label = 'ギフチケカメラの記録'; mo = document.getElementById('store-filter-month').value || 'all';
   }
   const withPhoto = rows.filter(r => r.photo_path);
   if (!rows.length) { showToast('保存する記録がありません', 'error'); return; }
@@ -2457,7 +2459,7 @@ let posExistingKeys = new Map();   // キー → すでに入っている件数(
 let posAllSavedRows = [];
 let matchedPosKeys = new Map();
 
-// 店舗の記録(usage_log)と、お会計(POS)の「店舗・日付・金額」が合った行に、「読取済」を付ける
+// ギフチケカメラの記録(usage_log)と、お会計(POS)の「店舗・日付・金額」が合った行に、「読取済」を付ける
 // (2人用の券=お会計が半額ずつ2件、お会計が2枚分で1件、にも対応)
 async function loadMatchedPosKeys() {
   try {
@@ -2710,7 +2712,7 @@ async function loadPosStoreView() {
   try {
     posAllSavedRows = await fetchAllPosSales(['store_name','card_type','sale_date','sales_amount','customer_name']);
     await loadMatchedPosKeys();
-    hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、店舗の記録(チケットカメラ)に、同じ店舗・日付・金額の記録がある行です。`;
+    hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、ギフチケカメラの記録(チケットカメラ)に、同じ店舗・日付・金額の記録がある行です。`;
     populatePosMonthFilter();
     posViewLoaded = true;
     renderPosStoreView();
