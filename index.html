@@ -553,7 +553,7 @@
 </header>
 
 <nav class="main-nav">
-  <button class="main-nav-tab active" data-page="page-dashboard" onclick="switchPage('page-dashboard', this)">📋 照合結果</button>
+  <button class="main-nav-tab active" data-page="page-dashboard" onclick="switchPage('page-dashboard', this)">📋 照合結果【利用停止中】</button>
   <button class="main-nav-tab" data-page="page-pos" onclick="switchPage('page-pos', this)">💳 POS取り込み</button>
   <button class="main-nav-tab" data-page="page-ticket" onclick="switchPage('page-ticket', this)">🎟 発券データ取り込み</button>
   <button class="main-nav-tab" data-page="page-sold" onclick="switchPage('page-sold', this)">🛒 販売データ取り込み</button>
@@ -580,6 +580,10 @@
 
   <!-- ============ ページ1: 照合結果ダッシュボード ============ -->
   <div class="page active" id="page-dashboard">
+
+    <div style="margin:0 0 14px;padding:12px 16px;border:1px solid var(--warn,#d9822b);border-radius:10px;background:rgba(245,158,11,0.10);font-size:0.9rem;line-height:1.6">
+      <b>【利用停止中】</b> この「照合結果」は、旧システム(n8n)の読み取り結果です。現在は使っていません。いまの記録は、「店舗の記録」(チケットカメラ)で確認してください。
+    </div>
 
     <div class="stats-grid" id="stats-grid">
       <div class="stat-card info">
