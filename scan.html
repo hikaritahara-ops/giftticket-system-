@@ -96,6 +96,7 @@
   .yline .ypre { font-family:ui-monospace,Menlo,monospace; font-weight:700; font-size:1.2rem; white-space:nowrap; }
   .yline input { flex:1; min-width:0; }
   .top { display:flex; justify-content:space-between; align-items:center; }
+  button.link { background:none; border:0; width:auto; color:var(--sub); font-size:.9rem; padding:8px 0; font-weight:400; text-decoration:underline; }
   .top a, .top button.link { background:none; color:var(--sub); font-size:.8rem; padding:4px 0; font-weight:400; text-decoration:underline; }
   .chk { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:.88rem; }
   .chk input { width:auto; margin-top:3px; }
@@ -211,10 +212,10 @@
 
       <div id="confirm-box"></div>
       <div style="margin-top:14px">
-        <button class="rec" id="btn-record-next" disabled>記録して、次の券を撮る</button>
+        <button class="rec" id="btn-record-next" disabled>記録する</button>
       </div>
-      <div style="margin-top:10px">
-        <button class="sec" id="btn-record" style="width:100%" disabled>記録だけする</button>
+      <div style="display:none">
+        <button class="sec" id="btn-record" disabled>記録だけする</button>
       </div>
       <div id="fail-area"></div>
     </div>
@@ -358,6 +359,7 @@ function setTicket(v, method, fromInput) {
   checked = null;
   $('check-area').replaceChildren();
   $('big-no').textContent = v || '— — — — — — — —';
+  clearConfirm();
   updateButton();
   if (TICKET_RE.test(v)) runCheck();
 }
@@ -384,9 +386,7 @@ function updateExpect() {
     else box.replaceChildren();
     return;
   }
-  const staff = $('staff-disc').checked;
-  box.replaceChildren(el('div', { className: 'msg ok', textContent:
-    `想定金額 ¥${amt.toLocaleString()}` + (staff ? '(スタッフ割 20%引き)' : '') + '。お会計の金額と合っているか、確認してください。' }));
+  box.replaceChildren();      // 金額は、記録の確認(「本当に記録しますか?」)で、1回だけ出す
 }
 function updateButton() {
   updateExpect();
@@ -413,28 +413,25 @@ async function runCheck() {
   const head = t[0];
   const issued = issuedR.data && issuedR.data[0];
   if (isNumOnly(t)) {
-    nodes.push(el('div', { className: 'msg ok', textContent: 'アルファベットのない番号です。プラチナムペントの券なら、上で選んでください(発券データとは照合しません)。' }));
-  } else if (issued) {
-    nodes.push(el('div', { className: 'msg ok', textContent:
-      `✓ 発券済みの券です:${COURSE[head] || issued.course || head}(額面 ${head === 'N' ? '¥7,560(90分。60分の券なら、下で選び直してください)' : '¥' + (PRICE[head] || 0).toLocaleString()})` +
-      (issued.destination ? ` / 発券先:${issued.destination}` : '') }));
-  } else {
-    nodes.push(el('div', { className: 'msg warn', textContent: '⚠ 発券データに見つからない番号です。打ち間違いがないか確認してください。' }));
+    nodes.push(el('div', { className: 'msg', textContent: 'アルファベットのない番号です。プラチナムペントの券なら、上で選んでください。' }));
+  } else if (!issued) {
+    if (head === 'M' || head === 'N') nodes.push(el('div', { className: 'msg', textContent: `${head}券(マグマルーム)は、発券データがありません。番号を、写真と見比べてください。` }));
+    else nodes.push(el('div', { className: 'msg warn', textContent: '⚠ 発券データにない番号です。打ち間違いを確認してください。' }));
   }
   const dups = [];
-  (logR.data || []).forEach(r => dups.push(`${r.used_date}に${r.store_name}で記録済み`));
+  (logR.data || []).forEach(r => dups.push(`${r.used_date} ${r.store_name}`));
   const m = matchR.data && matchR.data[0];
-  if (m) dups.push(`写真の読み取り結果に、${m.used_date_confirmed || m.used_date || '日付不明'}・${m.store_name || ''}で登録済み`);
-  let needConfirm = !issued && !isNumOnly(t);
+  if (m) dups.push(`${m.used_date_confirmed || m.used_date || '日付不明'} ${m.store_name || ''}(旧システム)`);
+  let needConfirm = !issued && !isNumOnly(t) && !(head === 'M' || head === 'N');
   if (dups.length) {
     needConfirm = true;
-    nodes.push(el('div', { className: 'msg ng', textContent: '⚠ この券は、すでに使われた記録があります:' + dups.join(' / ') }));
+    nodes.push(el('div', { className: 'msg ng', textContent: '⚠ すでに記録があります:' + dups.join(' / ') }));
   }
   let chk = null;
   if (needConfirm) {
     chk = el('input', { type: 'checkbox', id: 'force' });
     chk.addEventListener('change', () => { checked.ready = chk.checked; updateButton(); });
-    nodes.push(el('label', { className: 'chk' }, [chk, el('span', { textContent: '確認しました。それでも記録する' })]));
+    nodes.push(el('label', { className: 'chk' }, [chk, el('span', { textContent: '確認した。それでも記録する' })]));
   }
   out.replaceChildren(...nodes);
   checked = { ticket: t, ready: !needConfirm, issued: !!issued, dup: dups.length > 0 };
@@ -463,7 +460,7 @@ function buildRow() {
 function resetForNext() {
   currentPhoto = null;
   $('ticket').value = ''; checked = null; inputMethod = '手入力';
-  $('staff-disc').checked = false; $('n-course').value = ''; $('p-course').value = ''; $('confirm-box').replaceChildren();
+  $('staff-disc').checked = false; $('n-course').value = ''; $('p-course').value = ''; clearConfirm();
   $('big-no').textContent = '— — — — — — — —';
   $('ocr-area').replaceChildren();
   $('check-area').replaceChildren();
@@ -536,16 +533,14 @@ function renderFailed() {
   box.replaceChildren(...nodes);
 }
 // 記録の前に、「本当に記録しますか?」を表示する(押し間違いを防ぐため)
+function clearConfirm() { $('confirm-box').replaceChildren(); $('btn-record-next').parentElement.style.display = ''; }
 function askConfirm(mode) {
   const row = buildRow();
   if (!row) return;
   const amt = row.expected_amount != null ? '¥' + row.expected_amount.toLocaleString() : '-';
-  const yes = el('button', { className: 'rec', textContent: mode === 'next' ? 'はい、記録して、次の券を撮る' : 'はい、記録する', style: 'margin-top:10px' });
-  const no = el('button', { className: 'sec', textContent: 'やめる(直す)', style: 'width:100%;margin-top:8px' });
-  no.addEventListener('click', () => $('confirm-box').replaceChildren());
-  yes.addEventListener('click', async () => {
-    yes.disabled = true; no.disabled = true;
-    if (mode === 'next') {
+  const go = async (m) => {
+    yes.disabled = true; no.disabled = true; only.disabled = true;
+    if (m === 'next') {
       resetForNext();
       $('cam-file').click();   // 押した直後に、カメラを開く
       saveRow(row).then(ok => { if (ok) showMsg($('check-area'), 'ok', `✓ ${row.ticket_number} を記録しました`); });
@@ -554,17 +549,31 @@ function askConfirm(mode) {
       const ok = await saveRow(row);
       if (ok) showMsg($('check-area'), 'ok', `✓ ${row.ticket_number} を記録しました`);
     }
-  });
+  };
+  const yes = el('button', { className: 'rec', textContent: 'はい、記録して、次の券を撮る', style: 'margin-top:12px' });
+  const no = el('button', { className: 'sec', textContent: 'やめる(直す)', style: 'width:100%;margin-top:8px' });
+  const only = el('button', { type: 'button', className: 'link', textContent: '記録だけする(カメラは開かない)', style: 'display:block;margin:12px auto 0' });
+  no.addEventListener('click', () => clearConfirm());
+  yes.addEventListener('click', () => go('next'));
+  only.addEventListener('click', () => go('only'));
+  const big = 'font-size:1.35rem;font-weight:700;margin:2px 0 10px';
+  $('btn-record-next').parentElement.style.display = 'none';      // 確認を出している間は、下の「記録する」を隠す(押す場所を、はい/やめる だけにする)
   $('confirm-box').replaceChildren(
-    el('div', { className: 'msg warn', textContent:
-      `本当に記録しますか?  ${row.store_name} / ${row.used_date} / ${row.ticket_number} / 想定金額 ${amt}` + (row.staff_discount ? '(スタッフ割)' : '') }),
-    yes, no);
+    el('div', { className: 'msg warn' }, [
+      el('div', { style: 'font-weight:700;margin-bottom:8px', textContent: '本当に記録しますか?' }),
+      el('div', { style: 'font-size:.85rem;opacity:.85;margin-bottom:10px', textContent: `${row.store_name} / ${row.used_date}` }),
+      el('div', { textContent: '① お会計の金額と合っていますか?' }),
+      el('div', { style: big, textContent: amt + (row.staff_discount ? '(スタッフ割)' : '') }),
+      el('div', { textContent: '② 券の番号と見比べましたか?' }),
+      el('div', { className: 'mono', style: big.replace('margin:2px 0 10px', 'margin:2px 0 0'), textContent: row.ticket_number })
+    ]),
+    yes, no, only);
 }
 $('btn-record-next').addEventListener('click', () => askConfirm('next'));
 $('btn-record').addEventListener('click', () => askConfirm('only'));
-$('n-course').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateButton(); });
-$('p-course').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateButton(); });
-$('staff-disc').addEventListener('change', () => { $('confirm-box').replaceChildren(); updateExpect(); });
+$('n-course').addEventListener('change', () => { clearConfirm(); updateButton(); });
+$('p-course').addEventListener('change', () => { clearConfirm(); updateButton(); });
+$('staff-disc').addEventListener('change', () => { clearConfirm(); updateExpect(); });
 
 /* 最近の記録 */
 // 日付ごとの合計(この店舗・今月と先月の利用日)。お会計の合計と見比べるため
@@ -637,22 +646,22 @@ const onPhoto = async (ev) => {
     const { votes, valid } = await giftVotes(f, worker, area, (m) => showMsg(area, 'ok', m));
     const all = [...votes.keys()];
     if (!all.length) {
-      showMsg(area, 'warn', '番号が読み取れませんでした。券番号の部分を、少し大きく、まっすぐ写して、もう一度撮ってください。(それでも読めないときは、下の「手で入力する」を使えます)');
+      showMsg(area, 'warn', '番号が読み取れませんでした。券番号を大きくまっすぐ写して、もう一度撮るか、下の「手で入力する」を使ってください。');
       return;
     }
     // 候補を並べる:発券データにある番号 → 読めた回数の多い順
     const ranked = all.sort((a, b) => (valid.includes(b) - valid.includes(a)) || (votes.get(b) - votes.get(a)));
     if (valid.length === 1) {
       setTicket(valid[0], '撮影読取');
-      showMsg(area, 'ok', '読み取りました。大きく表示された番号を、券の番号と見比べてください。違うときは、もう一度撮影してください。');
+      area.replaceChildren();
       return;
     }
     if (valid.length === 0 && ranked.length === 1) {
       setTicket(ranked[0], '撮影読取');
-      showMsg(area, 'warn', '読み取りました(発券データには、見つかっていません)。券の番号と、よく見比べてください。');
+      area.replaceChildren();
       return;
     }
-    const box = el('div', {}, [el('div', { className: 'msg warn', textContent: '番号の候補が複数あります。券の番号と合っているものを、タップしてください。(✓は、発券データにある番号です)' })]);
+    const box = el('div', {}, [el('div', { className: 'msg warn', textContent: '番号の候補が複数あります。合っているものを選んでください。(✓=発券データにある番号)' })]);
     const chips = el('div', { className: 'chips' });
     ranked.slice(0, 5).forEach(c => {
       const chip = el('span', { className: 'chip', textContent: (valid.includes(c) ? '✓ ' : '') + c });
