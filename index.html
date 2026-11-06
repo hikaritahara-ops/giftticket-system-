@@ -2457,33 +2457,54 @@ let posExistingKeys = new Map();   // キー → すでに入っている件数(
 let posAllSavedRows = [];
 let matchedPosKeys = new Map();
 
-// 照合結果(matching_results)から、すでに読み取り済み(POSと一致済み)の「店舗|日付」ごとのお客様名一覧を作る
+// 店舗の記録(usage_log)と、お会計(POS)の「店舗・日付・金額」が合った行に、「読取済」を付ける
+// (2人用の券=お会計が半額ずつ2件、お会計が2枚分で1件、にも対応)
 async function loadMatchedPosKeys() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/matching_results?select=store_name,used_date_confirmed,customer_name,pos_match_status&pos_match_status=in.(%E4%B8%80%E8%87%B4,%E6%89%8B%E5%8B%95%E7%A2%BA%E8%AA%8D)`, {
-      headers: sbHeaders()
+    const logs = []; let from = 0;
+    while (true) {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?select=store_name,used_date,expected_amount&order=id.asc`, {
+        headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + 999}` })
+      });
+      if (!res.ok) throw new Error('usage_log HTTP ' + res.status);
+      const part = await res.json(); logs.push(...part);
+      if (part.length < 1000) break;
+      from += 1000;
+    }
+    const pool = new Map();     // POS店舗|日 → 記録の金額の一覧
+    logs.forEach(l => {
+      if (!l.used_date || l.expected_amount == null) return;
+      const k = `${STORE_POS_MAPPING[l.store_name] || l.store_name}|${String(l.used_date).slice(0, 10)}`;
+      if (!pool.has(k)) pool.set(k, []);
+      pool.get(k).push(Number(l.expected_amount));
     });
-    if (!res.ok) { matchedPosKeys = new Map(); return; }
-    const rows = await res.json();
-    const m = new Map();
-    rows.filter(r => r.used_date_confirmed).forEach(r => {
-      const posStoreName = STORE_POS_MAPPING[r.store_name] || r.store_name;
-      const key = `${posStoreName}|${r.used_date_confirmed}`;
-      const name = normalizeName(r.customer_name);
-      if (!name) return;
-      if (!m.has(key)) m.set(key, []);
-      m.get(key).push(name);
+    const grp = new Map();
+    posAllSavedRows.forEach(r => {
+      r._m = false;
+      if (r.card_type !== 'ﾁｹｯﾄ') return;
+      const k = `${r.store_name}|${String(r.sale_date).slice(0, 10)}`;
+      if (!grp.has(k)) grp.set(k, []);
+      grp.get(k).push(r);
     });
-    matchedPosKeys = m;
-  } catch(e) { matchedPosKeys = new Map(); }
+    grp.forEach((rows, k) => {
+      const amts = (pool.get(k) || []).slice(), halves = [];
+      const take = (v) => { const i = amts.indexOf(v); if (i < 0) return false; amts.splice(i, 1); return true; };
+      rows.forEach(r => { if (take(Number(r.sales_amount))) r._m = true; });                       // 金額が同じ
+      rows.filter(r => !r._m).forEach(r => {                                                       // お会計が2枚分で1件
+        const v = Number(r.sales_amount);
+        for (let i = 0; i < amts.length && !r._m; i++) for (let j = i + 1; j < amts.length; j++) {
+          if (amts[i] + amts[j] === v) { amts.splice(j, 1); amts.splice(i, 1); r._m = true; break; }
+        }
+      });
+      rows.filter(r => !r._m).forEach(r => {                                                       // 2人用の券(お会計は半額ずつ)
+        const v = Number(r.sales_amount), h = halves.indexOf(v);
+        if (h >= 0) { halves.splice(h, 1); r._m = true; }
+        else if (take(v * 2)) { halves.push(v); r._m = true; }
+      });
+    });
+  } catch (e) { posAllSavedRows.forEach(r => { r._m = false; }); }
 }
-function isPosRowMatched(r) {
-  const names = matchedPosKeys.get(`${r.store_name}|${r.sale_date}`);
-  if (!names) return false;
-  const pName = normalizeName(r.customer_name);
-  if (!pName) return false;
-  return names.some(n => pName.includes(n) || n.includes(pName));
-}
+function isPosRowMatched(r) { return !!r._m; }
 
 const posDropzone = document.getElementById('pos-dropzone');
 const posFileInput = document.getElementById('pos-file-input');
@@ -2625,10 +2646,7 @@ document.getElementById('pos-upsert-btn').addEventListener('click', async () => 
   progressText.textContent = `完了しました(成功: ${done}件 / 失敗: ${errCount}件)`;
   upsertBtn.textContent = '完了しました';
   // 取り込みが成功したら、要確認の券を自動で再照合する(ボタンを押す手間をなくす)
-  if (done > 0) {
-    try { await autoRematchAfterPosImport(progressText, logBox); }
-    catch (e) { logBox.innerHTML += `<div class="err-line">✗ 自動再照合でエラー: ${e.message}(照合結果ページの「POSデータで再照合」ボタンで再実行できます)</div>`; }
-  }
+  // (旧システムの「要確認」の自動再照合は、やめました)
 });
 
 // POS取り込み直後の自動再照合。照合結果を読み直してから、要確認の券だけを再照合する
@@ -2692,7 +2710,7 @@ async function loadPosStoreView() {
   try {
     posAllSavedRows = await fetchAllPosSales(['store_name','card_type','sale_date','sales_amount','customer_name']);
     await loadMatchedPosKeys();
-    hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、ギフチケ照合ですでにこのお会計データと一致が確認できている行です。`;
+    hint.textContent = `保存済み ${posAllSavedRows.length.toLocaleString()} 件を読み込みました。店舗名をクリックすると明細が開きます。「✅読取済」は、店舗の記録(チケットカメラ)に、同じ店舗・日付・金額の記録がある行です。`;
     populatePosMonthFilter();
     posViewLoaded = true;
     renderPosStoreView();
