@@ -96,6 +96,14 @@
   .yline .ypre { font-family:ui-monospace,Menlo,monospace; font-weight:700; font-size:1.2rem; white-space:nowrap; }
   .yline input { flex:1; min-width:0; }
   .top { display:flex; justify-content:space-between; align-items:center; }
+  details.fold { border:1px solid var(--line); border-radius:12px; margin-top:10px; background:rgba(255,255,255,.02); }
+  details.fold:first-of-type { margin-top:0; }
+  details.fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; padding:13px 14px; font-weight:700; font-size:.95rem; -webkit-tap-highlight-color:transparent; }
+  details.fold > summary::-webkit-details-marker { display:none; }
+  details.fold > summary .cnt { margin-left:auto; color:var(--sub); font-weight:400; font-size:.8rem; }
+  details.fold > summary::after { content:'▽'; color:var(--sub); font-size:.85rem; margin-left:4px; }
+  details.fold[open] > summary::after { content:'△'; }
+  details.fold > .fold-body { padding:2px 14px 12px; }
   button.link { background:none; border:0; width:auto; color:var(--sub); font-size:.9rem; padding:8px 0; font-weight:400; text-decoration:underline; }
   .top a, .top button.link { background:none; color:var(--sub); font-size:.8rem; padding:4px 0; font-weight:400; text-decoration:underline; }
   .chk { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:.88rem; }
@@ -163,10 +171,14 @@
         <div id="y-confirm"></div>
       </div>
       <div class="card">
-        <div class="top"><b style="font-size:.95rem">この店舗の、日付ごとの枚数(優待券)</b></div>
-        <div id="y-totals" style="margin:8px 0 14px"></div>
-        <div class="top"><b style="font-size:.95rem">この店舗の最近の記録(優待券)</b></div>
-        <ul class="list" id="y-recent"></ul>
+        <details class="fold" id="fold-y-day">
+          <summary>この店舗の、日付ごとの枚数(優待券)<span class="cnt" id="y-day-count"></span></summary>
+          <div class="fold-body"><div id="y-totals"></div></div>
+        </details>
+        <details class="fold" id="fold-y-recent">
+          <summary>この店舗の最近の記録(優待券)<span class="cnt" id="y-recent-count"></span></summary>
+          <div class="fold-body"><ul class="list" id="y-recent"></ul></div>
+        </details>
       </div>
     </div>
 
@@ -242,10 +254,14 @@
     </div>
 
     <div class="card">
-      <div class="top"><b style="font-size:.95rem">この店舗の、日付ごとの合計</b></div>
-      <div id="day-totals" style="margin:8px 0 14px"></div>
-      <div class="top"><b style="font-size:.95rem">この店舗の最近の記録</b></div>
-      <ul class="list" id="recent"></ul>
+      <details class="fold" id="fold-day">
+        <summary>この店舗の、日付ごとの合計<span class="cnt" id="day-count"></span></summary>
+        <div class="fold-body"><div id="day-totals"></div></div>
+      </details>
+      <details class="fold" id="fold-recent">
+        <summary>この店舗の最近の記録<span class="cnt" id="recent-count"></span></summary>
+        <div class="fold-body"><ul class="list" id="recent"></ul></div>
+      </details>
     </div>
     </div>
   </div>
@@ -572,6 +588,12 @@ $('n-course').addEventListener('change', () => { clearConfirm(); updateButton();
 $('p-course').addEventListener('change', () => { clearConfirm(); updateButton(); });
 $('staff-disc').addEventListener('change', () => { clearConfirm(); updateExpect(); });
 
+/* 開く・閉じるの状態を、この端末に覚えておく(初期は、閉じる) */
+['fold-day', 'fold-recent', 'fold-y-day', 'fold-y-recent'].forEach(id => {
+  const d = $(id); if (!d) return;
+  try { if (localStorage.getItem('fold:' + id) === '1') d.open = true; } catch (e) {}
+  d.addEventListener('toggle', () => { try { localStorage.setItem('fold:' + id, d.open ? '1' : '0'); } catch (e) {} });
+});
 /* 最近の記録 */
 // 日付ごとの合計(この店舗・今月と先月の利用日)。お会計の合計と見比べるため
 async function loadDayTotals() {
@@ -582,7 +604,7 @@ async function loadDayTotals() {
   const { data, error } = await sb.from('usage_log').select('used_date,expected_amount')
     .eq('store_name', $('store').value).gte('used_date', from).order('used_date', { ascending: false }).limit(1000);
   if (error) { box.replaceChildren(); return; }
-  if (!data.length) { box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '今月・先月の記録は、まだありません。' })); return; }
+  if (!data.length) { $('day-count').textContent = ''; box.replaceChildren(el('div', { style: 'color:var(--sub);font-size:.85rem', textContent: '今月・先月の記録は、まだありません。' })); return; }
   const g = new Map();
   data.forEach(r => {
     const d = String(r.used_date).slice(0, 10);
@@ -591,6 +613,7 @@ async function loadDayTotals() {
     if (r.expected_amount != null) e.sum += Number(r.expected_amount); else e.none++;
   });
   const sel = $('used-date').value;
+  $('day-count').textContent = `${g.size}日分`;
   box.replaceChildren(...[...g.entries()].map(([d, e]) => {
     const on = d === sel;
     return el('div', { style: `display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;${on ? 'background:rgba(59,130,246,.18);' : ''}border-bottom:1px solid var(--line)` }, [
@@ -607,7 +630,8 @@ async function loadRecent() {
     .eq('store_name', $('store').value)
     .order('created_at', { ascending: false }).limit(15);
   if (error) { ul.replaceChildren(el('li', { textContent: '読み込めませんでした' })); return; }
-  if (!data.length) { ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' })); return; }
+  if (!data.length) { $('recent-count').textContent = ''; ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' })); return; }
+  $('recent-count').textContent = `${data.length}件`;
   ul.replaceChildren(...data.map(r => {
     return el('li', {}, [
       el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })]),
@@ -1361,6 +1385,7 @@ async function loadYutaiTotals() {
     const g = new Map();
     data.forEach(r => { const d = String(r.used_date).slice(0, 10); g.set(d, (g.get(d) || 0) + 1); });
     const sel = $('y-date').value;
+    $('y-day-count').textContent = `${g.size}日分`;
     box.replaceChildren(...[...g.entries()].map(([d, n]) => el('div', { style: `display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;${d === sel ? 'background:rgba(59,130,246,.18);' : ''}border-bottom:1px solid var(--line)` }, [
       el('span', { textContent: d + (d === sel ? '(選択中)' : '') }), el('span', { style: 'font-weight:700', textContent: `${n}枚` })])));
   }
@@ -1368,6 +1393,7 @@ async function loadYutaiTotals() {
   if (r2.error) ul.replaceChildren(el('li', { textContent: '読み込めませんでした' }));
   else if (!r2.data.length) ul.replaceChildren(el('li', { textContent: 'まだ記録がありません' }));
   else ul.replaceChildren(...r2.data.map(r => el('li', {}, [el('span', {}, [el('span', { className: 'mono', textContent: r.ticket_number }), el('span', { style: 'color:var(--sub);font-size:.8rem', textContent: `  ${r.used_date}` })])])));
+  $('y-recent-count').textContent = r2.data && r2.data.length ? `${r2.data.length}件` : '';
 }
 $('tab-gift').addEventListener('click', () => setMode('gift'));
 $('tab-yutai').addEventListener('click', () => setMode('yutai'));
