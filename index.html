@@ -1113,7 +1113,8 @@ async function matchStoreWithPos(logs) {
   if (!dated.length) return;
   const posStores = [...new Set(Object.values(STORE_POS_MAPPING).filter(Boolean))];   // 記録がまだ1件もない店舗も、未読み取りとして見えるよう全店舗
   const dates = dated.map(l => String(l.used_date).slice(0, 10)).sort();
-  const mn = dates[0], mx = dates[dates.length - 1];
+  const todayJst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  const mn = dates[0], mx = dates[dates.length - 1] > todayJst ? dates[dates.length - 1] : todayJst;   // お会計は、記録が一番新しい日より後(今日まで)も読む
   const inList = posStores.map(n => '"' + n + '"').join(',');
   const pos = [];
   for (let off = 0; off < 20000; off += 1000) {
