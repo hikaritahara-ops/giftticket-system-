@@ -400,8 +400,7 @@ async function runCheck() {
   if (isNumOnly(t)) {
     nodes.push(el('div', { className: 'msg', textContent: 'アルファベットのない番号は、プラチナムペント4時間(ペア)の券です(¥194,000)。番号を、写真と見比べてください。' }));
   } else if (!issued) {
-    if (head === 'M' || head === 'N') nodes.push(el('div', { className: 'msg', textContent: `${head}券(マグマ${head === 'M' ? '60分 ¥5,040' : '90分 ¥7,560'})は、発券データがありません。番号を、写真と見比べてください。` }));
-    else nodes.push(el('div', { className: 'msg warn', textContent: '⚠ 発券データにない番号です。打ち間違いを確認してください。' }));
+    if (head !== 'M' && head !== 'N') nodes.push(el('div', { className: 'msg warn', textContent: '⚠ 発券データにない番号です。打ち間違いを確認してください。' }));
   }
   const dups = [];
   (logR.data || []).forEach(r => dups.push(`${r.used_date} ${r.store_name}`));
@@ -417,7 +416,7 @@ async function runCheck() {
     nodes.push(el('label', { className: 'chk' }, [chk, el('span', { textContent: '確認した。それでも記録する' })]));
   }
   out.replaceChildren(...nodes);
-  checked = { ticket: t, ready: !needConfirm, issued: !!issued, dup: dups.length > 0 };
+  checked = { ticket: t, ready: !needConfirm, issued: !!issued || head === 'M' || head === 'N', dup: dups.length > 0 };
   updateButton();
 }
 
@@ -871,7 +870,7 @@ async function checkTicketBatch(r) {      // 発券データにあるか・す�
     sb.from('usage_log').select('store_name,used_date').eq('ticket_number', t).order('used_date', { ascending: false }).limit(1)
   ]);
   if (r.ticket !== t) return;
-  r.issued = isNumOnly(t) ? true : !!(iss.data && iss.data.length);
+  r.issued = (isNumOnly(t) || /^[MN]/.test(t)) ? true : !!(iss.data && iss.data.length);
   r.prior = (log.data && log.data[0]) ? `${log.data[0].used_date} に ${log.data[0].store_name} で記録済み` : null;
   refreshAll();
 }
@@ -891,9 +890,8 @@ function refreshRow(r) {
   else if (!r.dateOk) { kind = 'warn'; text = '利用日を、写真と見比べて、「日付OK」にチェックしてください。(最初の日付は、写真の日付を仮に入れています)'; }
   else {
     const amt = amountFor(r.ticket, r.ncourse, r.staff, r.pcourse);
-    kind = (r.issued === false && !/^[MN]/.test(r.ticket || '')) ? 'warn' : 'ok';
-    const mn = /^[MN]/.test(r.ticket || '');
-    text = (r.issued === false ? (mn ? `ℹ ${r.ticket[0]}券(マグマルーム${r.ticket[0] === 'M' ? '60分' : '90分'})は、発券データがありません。番号の1文字目(MかN)と数字を、写真と見比べてください。 ` : '⚠ 発券データに無い番号です。 ') : '✓ ') + (amt != null ? `想定金額 ¥${amt.toLocaleString()}` + (r.staff ? '(スタッフ割)' : '') : '');
+    kind = (r.issued === false) ? 'warn' : 'ok';
+    text = (r.issued === false ? '⚠ 発券データに無い番号です。 ' : '✓ ') + (amt != null ? `想定金額 ¥${amt.toLocaleString()}` + (r.staff ? '(スタッフ割)' : '') : '');
   }
   e.st.className = 'st ' + kind; e.st.textContent = text;
 }
