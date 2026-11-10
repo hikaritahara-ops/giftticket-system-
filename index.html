@@ -533,6 +533,15 @@
     </div>
     <button class="btn" style="width:100%" id="login-btn">ログイン</button>
     <div class="login-error" id="login-error"></div>
+    <div style="text-align:center;margin-top:14px"><a href="#" id="forgot-link" style="color:var(--text3);font-size:.8rem">パスワードを忘れた方・変更する方</a></div>
+    <div id="forgot-msg" style="display:none;margin-top:10px;font-size:.8rem;color:var(--text2);line-height:1.6"></div>
+  </div>
+  <div class="login-box" id="recovery-box" style="display:none">
+    <div class="logo" style="justify-content:center;margin-bottom:1.2rem"><div class="logo-dot"></div>新しいパスワードを決める</div>
+    <div class="login-field"><label>新しいパスワード(8文字以上)</label><input type="password" id="new-pw1" class="edit-input" autocomplete="new-password"></div>
+    <div class="login-field"><label>もう一度</label><input type="password" id="new-pw2" class="edit-input" autocomplete="new-password"></div>
+    <button class="btn" style="width:100%" id="new-pw-btn">パスワードを変更する</button>
+    <div class="login-error" id="new-pw-error"></div>
   </div>
 </div>
 
@@ -974,15 +983,56 @@ function initSupabaseClient() {
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 }
 
+let recoveryMode = /type=recovery/.test(location.hash);   // パスワード再設定のメールから来たとき
+
+function showRecovery() {
+  recoveryMode = true;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app-root').style.display = 'none';
+  document.getElementById('recovery-box').style.display = 'block';
+  Array.from(document.querySelectorAll('#login-screen > .login-box')).forEach(b => { if (b.id !== 'recovery-box') b.style.display = 'none'; });
+}
+
 async function initAuth() {
   initSupabaseClient();
   const { data } = await supabaseClient.auth.getSession();
   currentSession = data.session;
-  if (currentSession) { showApp(); } else { showLogin(); }
+  if (recoveryMode) { showRecovery(); }
+  else if (currentSession) { showApp(); } else { showLogin(); }
   supabaseClient.auth.onAuthStateChange((event, session) => {
     currentSession = session;
+    if (event === 'PASSWORD_RECOVERY') { showRecovery(); return; }
+    if (recoveryMode) return;
     if (session) { showApp(); } else { showLogin(); }
   });
+}
+
+async function doForgot(ev) {
+  ev.preventDefault();
+  const email = document.getElementById('login-email').value.trim();
+  const box = document.getElementById('forgot-msg');
+  box.style.display = 'block';
+  if (!email) { box.textContent = '上のメールアドレス欄に、ご自分のメールアドレスを入れてから、もう一度押してください。'; return; }
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  box.textContent = error
+    ? 'メールを送れませんでした。しばらくしてからもう一度お試しください。(短時間に何度も送ると制限されます)'
+    : 'メールを送りました(登録されているアドレスの場合のみ届きます)。届いたメールのリンクを開くと、新しいパスワードを決められます。';
+}
+
+async function doSetNewPassword() {
+  const p1 = document.getElementById('new-pw1').value, p2 = document.getElementById('new-pw2').value;
+  const err = document.getElementById('new-pw-error'); err.style.display = 'none';
+  const fail = (t) => { err.textContent = t; err.style.display = 'block'; };
+  if (p1.length < 8) return fail('8文字以上にしてください。');
+  if (p1 !== p2) return fail('2つのパスワードが一致しません。');
+  const btn = document.getElementById('new-pw-btn'); btn.disabled = true;
+  const { error } = await supabaseClient.auth.updateUser({ password: p1 });
+  btn.disabled = false;
+  if (error) return fail('変更できませんでした。リンクの期限切れの可能性があります。もう一度メールを送ってください。');
+  recoveryMode = false;
+  history.replaceState(null, '', location.pathname);
+  alert('パスワードを変更しました。');
+  location.reload();
 }
 
 function showLogin() {
@@ -1018,6 +1068,8 @@ async function doLogout() {
 }
 
 document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('forgot-link').addEventListener('click', doForgot);
+document.getElementById('new-pw-btn').addEventListener('click', doSetNewPassword);
 document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('login-email').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
