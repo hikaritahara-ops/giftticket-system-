@@ -862,6 +862,9 @@
         <button class="btn-small" onclick="exportYutaiExcel()">📥 Excelで出力</button>
         <button class="btn-small" onclick="downloadPhotosZip('yutai')">📷 写真をまとめて保存(ZIP)</button>
       </div>
+      <h3 style="margin:1rem 0 .4rem;font-size:1rem">読み取り状況(どの店舗の、いつの分が、まだ撮影されていないか)</h3>
+      <div class="hint">お会計(POS)に優待券の処理がある日のうち、優待券の撮影・記録がまだない日が <b style="color:var(--danger)">未</b> です。右の「未撮影の日」に、日付を並べています。上の「月」で月を切り替えられます(「すべて」のときは、最新の月)。</div>
+      <div id="yutai-coverage"></div>
       <h3 style="margin:1rem 0 .4rem;font-size:1rem">店舗×日付ごとの突合(撮影枚数 と POSの優待処理数)</h3>
       <div id="yutai-agg"></div>
       <h3 style="margin:1.6rem 0 .4rem;font-size:1rem">撮影した優待券の一覧</h3>
@@ -1594,7 +1597,62 @@ function yutaiCompute() {
   list.sort((a, b) => b.d.localeCompare(a.d) || (rev[a.st] || a.st).localeCompare(rev[b.st] || b.st));
   return { list, rev, lastPos: lastPos ? String(lastPos).slice(0, 10) : '' };
 }
+function renderYutaiCoverage() {
+  const box = document.getElementById('yutai-coverage');
+  if (!box) return;
+  const fs = document.getElementById('yutai-filter-store').value;
+  let mo = document.getElementById('yutai-filter-month').value;
+  if (!mo) {
+    const ms = yutaiPos.map(p => String(p.sale_date).slice(0, 7)).concat(yutaiRows.map(r => String(r.used_date).slice(0, 7))).filter(Boolean).sort();
+    mo = ms.length ? ms[ms.length - 1] : '';
+  }
+  if (!mo) { box.innerHTML = '<div class="hint">データがありません。</div>'; return; }
+  const [Y, M] = mo.split('-').map(Number), days = new Date(Y, M, 0).getDate();
+  const cell = {};   // 店舗(POS名)|日 → { photo, pos }
+  const get = (ps, d) => { const k = ps + '|' + d; return cell[k] || (cell[k] = { photo: 0, pos: 0 }); };
+  yutaiRows.forEach(r => {
+    const ps = STORE_POS_MAPPING[r.store_name] || r.store_name, d = r.used_date ? String(r.used_date).slice(0, 10) : '';
+    if (!ps || !d || d.slice(0, 7) !== mo) return;
+    get(ps, d).photo++;
+  });
+  yutaiPos.forEach(p => {
+    const d = String(p.sale_date).slice(0, 10);
+    if (d.slice(0, 7) !== mo) return;
+    get(p.store_name, d).pos++;
+  });
+  const lastPos = yutaiPos.reduce((m, p) => p.sale_date > m ? p.sale_date : m, '');
+  const lastD = lastPos ? String(lastPos).slice(0, 10) : '';
+  const stores = Object.keys(STORE_POS_MAPPING).filter(n => !fs || (STORE_POS_MAPPING[n] || n) === fs);
+  let head = '<th style="text-align:left;position:sticky;left:0;background:var(--bg2,#121a2b)">店舗</th>';
+  for (let d = 1; d <= days; d++) head += `<th style="padding:4px 3px;text-align:center;font-size:0.68rem">${d}</th>`;
+  head += '<th style="text-align:right">未撮影</th><th style="text-align:left">未撮影の日</th>';
+  let totalUn = 0, totalN = 0;
+  const rowsHtml = stores.map(sn => {
+    const ps = STORE_POS_MAPPING[sn];
+    let un = [], unN = 0, any = 0, tds = '';
+    for (let d = 1; d <= days; d++) {
+      const ds = `${mo}-${String(d).padStart(2, '0')}`, e = cell[ps + '|' + ds];
+      let ch = '·', col = 'var(--text3)', tip = '優待の処理なし・撮影なし', bg = '';
+      if (e && e.pos > 0) {
+        any++;
+        if (e.photo === 0) { ch = '未'; col = '#fff'; bg = 'var(--danger)'; tip = `未撮影: POSの優待処理 ${e.pos}件`; un.push(d); unN += e.pos; }
+        else if (e.photo === e.pos) { ch = '✓'; col = 'var(--ok)'; tip = `一致: ${e.pos}枚`; }
+        else { ch = '△'; col = 'var(--warn)'; tip = `枚数が違う: 撮影 ${e.photo}枚 / POS ${e.pos}件`; }
+      } else if (e && e.photo > 0) {
+        if (!lastD || ds > lastD) { ch = '○'; col = 'var(--text2,#aab)'; tip = `撮影${e.photo}枚(POSは未取込)`; }
+        else { ch = '撮'; col = 'var(--warn)'; tip = `撮影${e.photo}枚あるが、その日のPOSの優待処理がありません`; }
+      }
+      tds += `<td title="${escH(sn + ' ' + ds + ' ' + tip)}" style="text-align:center;padding:3px 2px;font-size:0.72rem;font-weight:700;color:${col};${bg ? 'background:' + bg + ';border-radius:4px' : ''}">${ch}</td>`;
+    }
+    totalUn += un.length; totalN += unN;
+    const state = any === 0 ? '<span style="color:var(--text3)">優待の処理なし</span>' : (un.length === 0 ? '<span style="color:var(--ok)">すべて撮影済み</span>' : `<b style="color:var(--danger)">${un.length}日 / ${unN}枚</b>`);
+    return `<tr><td style="white-space:nowrap;position:sticky;left:0;background:var(--bg2,#121a2b)">${escH(sn)}</td>${tds}<td style="text-align:right;white-space:nowrap">${state}</td><td style="font-size:0.75rem;min-width:140px">${un.length ? M + '/' + un.join('、') : ''}</td></tr>`;
+  }).join('');
+  box.innerHTML = `<div class="hint"><b>${Y}年${M}月</b>:未撮影の日は、全体で <b style="color:var(--danger)">${totalUn}日分 / ${totalN}枚</b>。 ✓=POSと枚数が一致 / △=枚数が違う / <span style="color:var(--danger);font-weight:700">未</span>=POSに優待の処理あり・撮影なし / ○=撮影あり(POSは未取込) / 撮=撮影はあるがPOSに優待の処理なし / ·=なし。マスにカーソルを置くと詳細が出ます。</div>` +
+    `<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr>${head}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
+}
 function renderYutai() {
+  renderYutaiCoverage();
   const { list, rev, lastPos } = yutaiCompute();
   const fs = document.getElementById('yutai-filter-store').value;
   const fm = document.getElementById('yutai-filter-month').value;
