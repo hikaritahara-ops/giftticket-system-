@@ -1075,7 +1075,8 @@ function ySyncStores() {
   $('y-store').disabled = src.disabled;
   if (!$('y-date').value) { $('y-date').value = todayJST(); $('y-date').max = todayJST(); }
 }
-function yRowReady(r) { return Y_RE.test(r.ticket) && !!r.date && !r.dup && !r.done && !r.prior; }
+const yLenOK = (r) => !!r.ticket && yLens.includes((r.ticket.split('-')[1] || '').length);
+function yRowReady(r) { return Y_RE.test(r.ticket) && yLenOK(r) && !!r.date && !r.dup && !r.done && !r.prior; }
 function yRefresh() {
   const seen = new Map();
   yRows.forEach(r => { r.dup = false; if (r.ticket) seen.set(r.ticket, (seen.get(r.ticket) || 0) + 1); });
@@ -1090,7 +1091,7 @@ function yRefresh() {
     else if (r.prior) { kind = 'ng'; text = '⚠ ' + r.prior + '(重複のため、記録できません)'; }
     else if (r.dup) { kind = 'ng'; text = '⚠ 同じ番号が、この一覧に2枚あります。'; }
     else if (!r.date) { kind = 'warn'; text = '日付を入れてください。'; }
-    else if (!r.done && !yLens.includes(r.ticket.split('-')[1].length)) { kind = 'warn'; text = '⚠ 番号の桁数が、ふつう(' + yLens.join('・') + '桁)と違います。写真と見比べて、直してください。'; }
+    else if (!r.done && !yLenOK(r)) { kind = 'ng'; text = '⚠ 番号の桁数が、ふつう(' + yLens.join('・') + '桁)と違うので、記録できません。写真と見比べて、直してください。'; }
     else if (!r.done && (r.auto || r.dateNote)) { kind = 'ok'; text = '✓ 記録できます' + (r.auto ? '。券番号は自動で読み取りました。写真と見比べてください' : '') + (r.dateNote ? '。日付は' + r.dateNote : ''); }
     r.e.st.className = 'st ' + kind; r.e.st.textContent = text;
   });
@@ -1111,7 +1112,9 @@ function yExtract(text) {
   const t = (text || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
   const out = [], re = /K\s*H\s*([0-9OIlSB]{2})\s*[-ー－―−‐—–_.:~・]?\s*([0-9OIlSB]{1,8})/gi;
   const fix = (x) => x.replace(/[Oo]/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8');
-  let m; while ((m = re.exec(t))) out.push({ yy: fix(m[1]), num: fix(m[2]) });
+  // 年(2桁)は、今年の前後1年だけ認める。それ以外(例:26を20と読む)は、読み違いとして、今年にそろえる
+  const Y = Number(Y_YY()), okYY = (v) => [Y - 1, Y, Y + 1].includes(Number(v));
+  let m; while ((m = re.exec(t))) { const yy = fix(m[1]); out.push({ yy: okYY(yy) ? yy : String(Y), num: fix(m[2]) }); }
   return out;
 }
 // 優待券の番号は、黒い太い枠の中に印字されている。枠を先に見つけて、その中だけを拡大して読む(速く、正確)
@@ -1195,10 +1198,11 @@ function yOcr(file) {          // 1枚ずつ、順番に読む
     // 読み取りは、画像の大きさや読み方で結果が変わるため、いろいろな組み合わせで読み、多く出たものを採用する
     const best = () => {
       const thisYY = Y_YY();
+      // 桁数がふつうと違うもの(例:1桁だけ読めた)は、まちがいの可能性が高いので、採用しない(手入力にまかせる)
       return [...votes.entries()].map(([k, n]) => {
         const [yy, num] = k.split('|');
-        return { yy, num, score: n * 10 + (yLens.includes(num.length) ? 40 : 0) + (yy === thisYY ? 5 : 0) };
-      }).sort((a, b) => b.score - a.score)[0] || null;
+        return { yy, num, score: n * 10 + (yy === thisYY ? 5 : 0) };
+      }).filter(c => yLens.includes(c.num.length)).sort((a, b) => b.score - a.score)[0] || null;
     };
     const enough = () => [...votes.entries()].some(([k, n]) => n >= 2 && yLens.includes(k.split('|')[1].length));
     try {
