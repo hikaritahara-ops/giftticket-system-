@@ -538,7 +538,7 @@
   </div>
   <div class="login-box" id="recovery-box" style="display:none">
     <div class="logo" style="justify-content:center;margin-bottom:1.2rem"><div class="logo-dot"></div>新しいパスワードを決める</div>
-    <div class="login-field"><label>新しいパスワード(8文字以上)</label><input type="password" id="new-pw1" class="edit-input" autocomplete="new-password"></div>
+    <div class="login-field"><label>新しいパスワード(12文字以上)</label><input type="password" id="new-pw1" class="edit-input" autocomplete="new-password"></div>
     <div class="login-field"><label>もう一度</label><input type="password" id="new-pw2" class="edit-input" autocomplete="new-password"></div>
     <button class="btn" style="width:100%" id="new-pw-btn">パスワードを変更する</button>
     <div class="login-error" id="new-pw-error"></div>
@@ -1026,12 +1026,12 @@ async function doSetNewPassword() {
   const p1 = document.getElementById('new-pw1').value, p2 = document.getElementById('new-pw2').value;
   const err = document.getElementById('new-pw-error'); err.style.display = 'none';
   const fail = (t) => { err.textContent = t; err.style.display = 'block'; };
-  if (p1.length < 8) return fail('8文字以上にしてください。');
+  if (p1.length < 12) return fail('12文字以上にしてください。');
   if (p1 !== p2) return fail('2つのパスワードが一致しません。');
   const btn = document.getElementById('new-pw-btn'); btn.disabled = true;
   const { error } = await supabaseClient.auth.updateUser({ password: p1 });
   btn.disabled = false;
-  if (error) return fail('変更できませんでした。リンクの期限切れの可能性があります。もう一度メールを送ってください。');
+  if (error) return fail('変更できませんでした。(' + (error.message || '') + ')リンクの期限切れの可能性があります。もう一度メールを送ってください。');
   recoveryMode = false;
   history.replaceState(null, '', location.pathname);
   alert('パスワードを変更しました。');
