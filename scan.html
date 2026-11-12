@@ -270,6 +270,7 @@
 /* ============ 接続設定(公開してよい鍵です。権限はログインで制御) ============ */
 const SUPABASE_URL = 'https://nyziybuxchsicnfkujij.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_faUfMhKJTFPTaeFHeE8Z6A_qo23Wutl';
+const mustChangePw = (se) => !!(se && se.user && se.user.user_metadata && se.user.user_metadata.must_change_password === true);   // 管理者の初回ログイン(初期パスワードのまま)
 let recoveryMode = /type=recovery/.test(location.hash);   // パスワード再設定のメールから来たとき(createClientが#を消す前に調べる)
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -322,8 +323,9 @@ async function init() {
   render();
 }
 function render() {
-  $('recovery').classList.toggle('hidden', !recoveryMode);
-  if (recoveryMode) { $('login').classList.add('hidden'); $('app').classList.add('hidden'); return; }
+  const needPw = recoveryMode || mustChangePw(session);
+  $('recovery').classList.toggle('hidden', !needPw);
+  if (needPw) { $('login').classList.add('hidden'); $('app').classList.add('hidden'); return; }
   $('login').classList.toggle('hidden', !!session);
   $('app').classList.toggle('hidden', !session);
   if (session) { setupApp(); }
@@ -344,12 +346,13 @@ $('btn-newpw').addEventListener('click', async () => {
   if (p1.length < 12) { showMsg(m, 'warn', '12文字以上にしてください。'); return; }
   if (p1 !== p2) { showMsg(m, 'warn', '2つのパスワードが一致しません。'); return; }
   $('btn-newpw').disabled = true;
-  const { error } = await sb.auth.updateUser({ password: p1 });
+  const { error } = await sb.auth.updateUser({ password: p1, data: { must_change_password: false } });
   $('btn-newpw').disabled = false;
   if (error) { showMsg(m, 'ng', '変更できませんでした。(' + (error.message || '') + ')リンクの期限切れの可能性があります。もう一度メールを送ってください。'); return; }
   recoveryMode = false;
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
   alert('パスワードを変更しました。');
+  try { const r = await sb.auth.getSession(); session = r.data.session; } catch (e) {}
   render();
 });
 $('btn-logout').addEventListener('click', async () => { await sb.auth.signOut(); });
