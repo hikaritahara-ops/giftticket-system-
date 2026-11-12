@@ -136,6 +136,20 @@
     </div>
   </div>
 
+  <!-- パスワード再設定(メールのリンクから来たとき) -->
+  <div id="recovery" class="hidden">
+    <h1>📷 ギフチケカメラ記録</h1>
+    <div class="sub">新しいパスワードを決める</div>
+    <div class="card">
+      <label>新しいパスワード(12文字以上)</label>
+      <input id="new-pw1" type="password" autocomplete="new-password">
+      <label>もう一度</label>
+      <input id="new-pw2" type="password" autocomplete="new-password">
+      <div id="recovery-msg"></div>
+      <div style="margin-top:14px"><button id="btn-newpw" style="width:100%">パスワードを変更する</button></div>
+    </div>
+  </div>
+
   <!-- 記録画面 -->
   <div id="app" class="hidden">
     <div class="top">
@@ -256,6 +270,7 @@
 /* ============ 接続設定(公開してよい鍵です。権限はログインで制御) ============ */
 const SUPABASE_URL = 'https://nyziybuxchsicnfkujij.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_faUfMhKJTFPTaeFHeE8Z6A_qo23Wutl';
+let recoveryMode = /type=recovery/.test(location.hash);   // パスワード再設定のメールから来たとき(createClientが#を消す前に調べる)
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const STORES = [
@@ -303,10 +318,12 @@ function normalizeTicket(s) {
 async function init() {
   const { data } = await sb.auth.getSession();
   session = data.session;
-  sb.auth.onAuthStateChange((_e, s) => { session = s; render(); });
+  sb.auth.onAuthStateChange((e, s) => { session = s; if (e === 'PASSWORD_RECOVERY') recoveryMode = true; render(); });
   render();
 }
 function render() {
+  $('recovery').classList.toggle('hidden', !recoveryMode);
+  if (recoveryMode) { $('login').classList.add('hidden'); $('app').classList.add('hidden'); return; }
   $('login').classList.toggle('hidden', !!session);
   $('app').classList.toggle('hidden', !session);
   if (session) { setupApp(); }
@@ -321,6 +338,19 @@ $('btn-login').addEventListener('click', async () => {
   const { error } = await sb.auth.signInWithPassword({ email, password });
   $('btn-login').disabled = false;
   if (error) showMsg($('login-msg'), 'ng', 'ログインできませんでした。入力を確認してください。');
+});
+$('btn-newpw').addEventListener('click', async () => {
+  const p1 = $('new-pw1').value, p2 = $('new-pw2').value, m = $('recovery-msg');
+  if (p1.length < 12) { showMsg(m, 'warn', '12文字以上にしてください。'); return; }
+  if (p1 !== p2) { showMsg(m, 'warn', '2つのパスワードが一致しません。'); return; }
+  $('btn-newpw').disabled = true;
+  const { error } = await sb.auth.updateUser({ password: p1 });
+  $('btn-newpw').disabled = false;
+  if (error) { showMsg(m, 'ng', '変更できませんでした。(' + (error.message || '') + ')リンクの期限切れの可能性があります。もう一度メールを送ってください。'); return; }
+  recoveryMode = false;
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  alert('パスワードを変更しました。');
+  render();
 });
 $('btn-logout').addEventListener('click', async () => { await sb.auth.signOut(); });
 
