@@ -824,7 +824,7 @@
             <option value="none">お会計なし(要確認)</option>
             <option value="nodata">お会計データ未取込</option>
           </select></div>
-        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">券番号で検索</label><input id="store-filter-q" type="search" placeholder="例: C0014303 / 0014303" oninput="renderStoreView()" style="min-width:180px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:inherit"></div>
+        <div><label style="display:block;font-size:0.72rem;color:var(--text3)">券番号・日付で検索</label><input id="store-filter-q" type="search" placeholder="例: C0014303 / 11/9" oninput="renderStoreView()" style="min-width:180px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:inherit"></div>
         <button class="btn-small" onclick="loadStoreView()">再読み込み</button>
         <button class="btn-small" onclick="exportStoreExcel()">📥 Excelで出力</button>
         <button class="btn-small" onclick="downloadPhotosZip('gift')">📷 写真をまとめて保存(ZIP)</button>
@@ -1244,13 +1244,29 @@ async function matchStoreWithPos(logs) {
   left.forEach(arr => arr.forEach(p => storePosLeft.push(p)));
   storePosLeft.sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)));
 }
+// 検索欄に日付(例: 11/9, 11-09, 11月9日, 2026/11/9, 2026-11)が入っているとき、利用日と照合する(券番号には / や - が入らないので、取り違えない)
+function storeDateQuery(q) {
+  const t = String(q || '').replace(/[ー－―−‐]/g, '-');
+  let m = t.match(/^(?:(\d{4})[\/\-.年])?(\d{1,2})[\/\-.月](\d{1,2})日?$/);
+  if (m) return { y: m[1] || '', m: m[2].padStart(2, '0'), d: m[3].padStart(2, '0') };
+  m = t.match(/^(\d{4})[\/\-.年](\d{1,2})月?$/);
+  if (m) return { y: m[1], m: m[2].padStart(2, '0'), d: '' };
+  return null;
+}
+function storeQueryHit(r, q) {
+  if (!q) return true;
+  if (String(r.log.ticket_number || '').toUpperCase().includes(q)) return true;
+  const dq = storeDateQuery(q), ud = String(r.log.used_date || '').slice(0, 10);
+  if (!dq || !ud) return false;
+  return (!dq.y || ud.slice(0, 4) === dq.y) && ud.slice(5, 7) === dq.m && (!dq.d || ud.slice(8, 10) === dq.d);
+}
 function storeFilteredRows() {
   const fs = document.getElementById('store-filter-store').value;
   const fmo = document.getElementById('store-filter-month').value;
   const fp = document.getElementById('store-filter-pos').value;
   const qe = document.getElementById('store-filter-q');
   const q = qe ? qe.value.normalize('NFKC').replace(/\s+/g, '').toUpperCase() : '';
-  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo) && (!q || String(r.log.ticket_number || '').toUpperCase().includes(q)));
+  return storeRows.filter(r => (!fs || r.log.store_name === fs) && (!fp || r.pos === fp) && (!fmo || String(r.log.used_date || '').slice(0, 7) === fmo) && storeQueryHit(r, q));
 }
 const STORE_COURSE = { A:'A(60min)', B:'B(100min)', C:'C(120min)', P:'P(ペントハウス2.5h)', M:'M(マグマルーム60分)', N:'N(マグマルーム90分)' };
 for (let i = 0; i < 10; i++) STORE_COURSE[String(i)] = 'プラチナムペント 4時間(2名様用)';
