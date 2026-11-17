@@ -1123,6 +1123,24 @@ let storeRows = [];
 function escH(v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+let issuedDisc = {};   // 券番号 → { rate: 10|20, sold_to: 販売先 }  (台帳より)
+// 取引先に販売した券の割引。管理者が決めた割引率(usage_log.discount_rate)があればそれ、なければ台帳の記載を「候補」にする
+function storeDiscInfo(l) {
+  const sug = issuedDisc[l.ticket_number] || null;
+  const set = l.discount_rate != null ? Number(l.discount_rate) : null;
+  return { sug, set, pending: set == null && !!sug };
+}
+// 取引先販売の割引額(額面 × 割引率)。お会計(POS)は、店舗がプロパー(満額)で打つので、想定金額は変えず、割引額だけを別に出す
+function storeDiscAmount(l, rate) {
+  const h = String(l.ticket_number || '')[0], face = STORE_FACE[h];
+  if (!face || h === 'N' || !rate) return null;
+  return Math.round(face * rate / 100);
+}
+function storeFaceAmount(ticket, rate, staff) {
+  const h = String(ticket || '')[0], face = STORE_FACE[h];
+  if (!face || h === 'N') return null;
+  return Math.round(face * (rate ? (1 - rate / 100) : (staff ? 0.8 : 1)));
+}
 async function loadStoreView() {
   const body = document.getElementById('store-view-body');
   body.innerHTML = '<div class="loading"><div class="loading-spinner"></div>読み込み中...</div>';
@@ -1131,6 +1149,10 @@ async function loadStoreView() {
     if (!r1.ok) throw new Error('usage_log HTTP ' + r1.status);
     const logs = await r1.json();
     storeRows = logs.map(l => ({ log: l, photo: null, pos: 'nodata' }));
+    try {   // 台帳に割引の記載がある券(取引先に販売した分)
+      const rd = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=ticket_number,discount_rate,sold_to&discount_rate=not.is.null&limit=5000`, { headers: sbHeaders() });
+      issuedDisc = {}; if (rd.ok) (await rd.json()).forEach(x => { issuedDisc[x.ticket_number] = { rate: Number(x.discount_rate), sold_to: x.sold_to || '' }; });
+    } catch (e) { issuedDisc = {}; }
     await matchStoreWithPos(logs);
     storeViewLoaded = true;
     // 店舗の選択肢
@@ -1285,6 +1307,9 @@ function exportStoreExcel() {
       'コース': STORE_COURSE[h] || '',
       '額面': STORE_FACE[h] != null ? STORE_FACE[h] : '',
       'スタッフ割': l.staff_discount ? '○' : '',
+      '取引先割引': (() => { const d = storeDiscInfo(l), rt = d.set != null ? d.set : (d.sug ? d.sug.rate : 0); return rt ? rt + '%' + (d.set == null ? '(台帳・未確認)' : '') : ''; })(),
+      '割引額': (() => { const d = storeDiscInfo(l), a = storeDiscAmount(l, d.set != null ? d.set : (d.sug ? d.sug.rate : 0)); return a != null ? a : ''; })(),
+      '販売先': (issuedDisc[l.ticket_number] || {}).sold_to || '',
       '想定金額': l.expected_amount != null ? l.expected_amount : '',
       '入力方法': l.input_method || '',
       '記録日時': l.created_at ? new Date(l.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
@@ -1295,7 +1320,7 @@ function exportStoreExcel() {
   };
   const sorted = rows.slice().sort((a, b) => String(a.log.used_date).localeCompare(String(b.log.used_date)) || String(a.log.ticket_number).localeCompare(String(b.log.ticket_number)));
   const wb = XLSX.utils.book_new();
-  const cols = [10, 16, 12, 18, 8, 10, 10, 10, 18, 28, 12, 12, 12, 24].map(w => ({ wch: w }));
+  const cols = [10, 16, 12, 18, 8, 10, 14, 10, 28, 10, 10, 18, 28, 12, 24].map(w => ({ wch: w }));
   const add = (name, list) => {
     const ws = XLSX.utils.json_to_sheet(list.map(toObj));
     ws['!cols'] = cols;
@@ -1464,10 +1489,21 @@ function renderStoreView() {
   const posBadge = (v) => v === 'ok' ? '<span class="badge badge-ok">一致</span>' : v === 'none' ? '<span class="badge badge-danger">お会計なし</span>' : '<span class="badge badge-warn">未取込</span>';
   const fmt = (d) => d ? String(d).slice(0, 10) : '-';
   const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-  body.innerHTML = '<div class="table-scroll"><table><thead><tr>' + [['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','利用日(店舗)'],['input_method','入力方法'],['expected_amount','想定金額'],['pos','お会計']].map(([k, t]) => sortTh('store', k, t)).join('') + '<th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
+  const discBadge = (l) => {
+    const d = storeDiscInfo(l);
+    const dn = (rate) => { const a = storeDiscAmount(l, rate); return a != null ? ' 割引額¥' + a.toLocaleString() : ''; };
+    if (d.set > 0) return `<br><span class="badge badge-ok" title="${escH(d.sug ? d.sug.sold_to : '')}">取引先販売 ${d.set}%OFF${dn(d.set)}${d.sug && d.sug.sold_to ? '(' + escH(d.sug.sold_to.replace(/[（(].*$/, '')) + ')' : ''}</span>`;
+    if (d.pending) return `<br><span class="badge badge-warn" title="${escH(d.sug.sold_to)}">⚠ 台帳:${d.sug.rate}%OFF${dn(d.sug.rate)} 未確認(${escH(d.sug.sold_to.replace(/[（(].*$/, ''))})</span>`;
+    return '';
+  };
+  const pendN = rows.filter(r => storeDiscInfo(r.log).pending).length;
+  const dRows = rows.filter(r => { const d = storeDiscInfo(r.log); return (d.set || (d.pending ? d.sug.rate : 0)) > 0; });
+  const dSum = dRows.reduce((a, r) => { const d = storeDiscInfo(r.log); return a + (storeDiscAmount(r.log, d.set != null ? d.set : d.sug.rate) || 0); }, 0);
+  const bulk = dRows.length ? `<div class="hint" style="margin:6px 0">取引先に販売した券(割引あり): <b>${dRows.length}件 / 割引額の合計 ¥${dSum.toLocaleString()}</b>(いまの絞り込み条件の分)。店舗は満額でPOSを打つので、お会計との一致は、そのままです。${isStoreAdmin() && pendN ? ` <b style="color:var(--warn)">台帳の記載が未確認のものが${pendN}件あります。</b> <button class="btn-small" onclick="applyLedgerDiscounts()">台帳のとおりに、まとめて確認済みにする</button>(個別に変えるときは「✏️ 修正」から)` : ''}</div>` : '';
+  body.innerHTML = bulk + '<div class="table-scroll"><table><thead><tr>' + [['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','利用日(店舗)'],['input_method','入力方法'],['expected_amount','想定金額'],['pos','お会計']].map(([k, t]) => sortTh('store', k, t)).join('') + '<th>券の写真</th>' + (isStoreAdmin() ? '<th>管理(修正・削除)</th>' : '') + '</tr></thead><tbody>' +
     rows.map(r => {
       const l = r.log;
-      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
+      return `<tr><td>${escH(ts(l.created_at))}</td><td>${escH(l.store_name)}</td><td style="font-family:monospace">${escH(l.ticket_number)}</td><td>${escH(fmt(l.used_date))}</td><td>${escH(l.input_method)}</td><td>${l.expected_amount != null ? '¥' + Number(l.expected_amount).toLocaleString() : '-'}${l.staff_discount ? '(スタッフ割)' : ''}${discBadge(l)}</td><td>${posBadge(r.pos)}</td><td>${l.photo_path ? `<button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(l.photo_path)}" data-name="${escH(photoFileName(l))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openStoreEdit(${Number(l.id)})">✏️ 修正</button> <button class="btn-small" onclick="openStoreDelete(${Number(l.id)})">🗑 削除</button></td>` : ''}</tr>`;
     }).join('') + '</tbody></table></div>';
 }
 // ---- 記録の修正・削除は、管理部のアカウントだけ(データベース側でも、同じ制限をかけています) ----
@@ -1490,12 +1526,23 @@ function openStoreEdit(id) {
   const l = r.log;
   const inp = 'width:100%;padding:8px;margin:4px 0 12px;border-radius:8px;border:1px solid var(--border,#26324a);background:transparent;color:inherit;font-size:1rem';
   openStoreModal(`<h3 style="margin:0 0 12px;font-size:1rem">記録の修正:<span style="font-family:monospace">${escH(l.ticket_number)}</span>(${escH(l.store_name)})</h3>
+    <label style="font-size:.78rem;color:var(--text3)">券番号(読み違い・入力ミスを直すとき)</label><input id="se-ticket" type="text" value="${escH(l.ticket_number)}" autocomplete="off" style="${inp};font-family:monospace;text-transform:uppercase" oninput="seTicketChanged('${escH(l.ticket_number)}')">
     <label style="font-size:.78rem;color:var(--text3)">利用日</label><input id="se-date" type="date" value="${escH(String(l.used_date || '').slice(0, 10))}" style="${inp}">
     <label style="font-size:.78rem;color:var(--text3)">想定金額(円)</label><input id="se-amt" type="number" value="${l.expected_amount != null ? Number(l.expected_amount) : ''}" style="${inp}">
     <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input id="se-staff" type="checkbox" ${l.staff_discount ? 'checked' : ''} onchange="syncStaffAmount('${escH(l.ticket_number)}')"> スタッフ割(20%引き)<span style="color:var(--text3);font-size:.78rem">(チェックを変えると、金額も自動で変わります)</span></label>
+    <label style="font-size:.78rem;color:var(--text3)">取引先に販売した券の割引(想定金額は変わりません。割引額は、一覧に別に出ます)${(() => { const d = storeDiscInfo(l); return d.sug ? '(台帳:' + escH(d.sug.sold_to) + ')' : ''; })()}</label>
+    <select id="se-disc" style="${inp}">${(() => { const d = storeDiscInfo(l), cur = d.set != null ? d.set : (d.sug ? d.sug.rate : 0); return [[0, '割引なし(満額)'], [10, '10%OFF'], [20, '20%OFF']].map(([v, t]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${t}</option>`).join(''); })()}</select>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-small" onclick="closeStoreModal()">やめる</button><button class="btn-small" style="border-color:var(--accent);color:var(--accent)" onclick="saveStoreEdit(${Number(l.id)})">保存する</button></div>`);
 }
 // スタッフ割のチェックを切り替えたら、想定金額も自動で、額面(スタッフ割は80%)に合わせる(Nの券は、60分/90分で金額が違うので、そのまま)
+function normStoreTicket(v) {
+  return String(v || '').normalize('NFKC').replace(/[\s\-ー－]/g, '').toUpperCase();
+}
+// 券番号を変えたとき、頭の文字(コース)が変わるなら、想定金額も、そのコースの額面に合わせる
+function seTicketChanged(orig) {
+  const nt = normStoreTicket(document.getElementById('se-ticket').value);
+  if (nt[0] && nt[0] !== String(orig)[0] && STORE_FACE[nt[0]]) syncStaffAmount(nt);
+}
 function syncStaffAmount(ticket) {
   const h = String(ticket || '')[0], face = STORE_FACE[h];
   if (!face || h === 'N') return;
@@ -1510,23 +1557,59 @@ async function saveStoreEdit(id) {
   const amtRaw = document.getElementById('se-amt').value;
   const amt = amtRaw === '' ? null : Number(amtRaw);
   const staff = document.getElementById('se-staff').checked;
+  const newTicket = normStoreTicket(document.getElementById('se-ticket').value);
+  if (!/^([ABCPNM][0-9]{7}|[1-9][0-9]?)$/.test(newTicket)) { showToast('券番号の形が正しくありません(例: A0043235)', 'error'); return; }
+  const dEl = document.getElementById('se-disc'), dInfo = storeDiscInfo(l);
+  let rate = dEl ? Number(dEl.value) : 0;
+  if (rate === 0 && dInfo.set == null && !dInfo.sug) rate = null;     // 割引の話がない券は、空のまま
   if (!date) { showToast('利用日を入れてください', 'error'); return; }
   const changes = [];
+  if (newTicket !== l.ticket_number && /^[A-Z]/.test(newTicket)) {
+    try {   // すでに記録されている番号・発券されていない番号を、先に確認する
+      const rq = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?select=id,store_name,used_date&ticket_number=eq.${encodeURIComponent(newTicket)}&limit=1`, { headers: sbHeaders() });
+      const dup = rq.ok ? await rq.json() : [];
+      if (dup.length) { showToast(`${newTicket} は、すでに記録されています(${dup[0].store_name}・${String(dup[0].used_date).slice(0, 10)})。変更できません`, 'error'); return; }
+      const ri = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=ticket_number&ticket_number=eq.${encodeURIComponent(newTicket)}&limit=1`, { headers: sbHeaders() });
+      const iss = ri.ok ? await ri.json() : [];
+      if (!iss.length && !confirm(`${newTicket} は、発券の台帳にない番号です。\nこの番号に変更しますか?`)) return;
+    } catch (e) { showToast('番号の確認ができませんでした: ' + e.message, 'error'); return; }
+  }
+  if (newTicket !== l.ticket_number) changes.push(`券番号 ${l.ticket_number}→${newTicket}`);
   if (String(l.used_date || '').slice(0, 10) !== date) changes.push(`日付 ${String(l.used_date || '').slice(0, 10)}→${date}`);
   if ((l.expected_amount == null ? null : Number(l.expected_amount)) !== amt) changes.push(`金額 ${l.expected_amount == null ? '-' : l.expected_amount}→${amt == null ? '-' : amt}`);
   if (!!l.staff_discount !== staff) changes.push(`スタッフ割 ${l.staff_discount ? 'あり' : 'なし'}→${staff ? 'あり' : 'なし'}`);
+  if ((rate == null ? null : rate) !== (l.discount_rate == null ? null : Number(l.discount_rate))) changes.push(`取引先割引 ${l.discount_rate == null ? '-' : l.discount_rate + '%'}→${rate == null ? '-' : rate + '%'}`);
   if (!changes.length) { closeStoreModal(); return; }
   const stamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
   const note = [l.note, `管理者修正(${currentSession.user.email} ${stamp}): ${changes.join(', ')}`].filter(Boolean).join(' / ');
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?id=eq.${Number(id)}`, {
       method: 'PATCH', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }),
-      body: JSON.stringify({ used_date: date, expected_amount: amt, staff_discount: staff, note })
+      body: JSON.stringify({ ticket_number: newTicket, used_date: date, expected_amount: amt, staff_discount: staff, discount_rate: rate, note })
     });
     const out = res.ok ? await res.json() : [];
     if (!res.ok || !out.length) throw new Error('権限がないか、保存できませんでした');
     closeStoreModal(); showToast('修正しました'); storeViewLoaded = false; await loadStoreView();
   } catch (e) { showToast('修正できませんでした: ' + e.message, 'error'); }
+}
+// 台帳に割引の記載がある券を、台帳のとおりに「確認済み」にする(想定金額は変えない。割引率だけを保存する)
+async function applyLedgerDiscounts() {
+  const targets = storeRows.map(r => r.log).filter(l => storeDiscInfo(l).pending);
+  if (!targets.length) return;
+  if (!confirm(`${targets.length}件を、台帳の割引率のとおりに、確認済みにします。\n(想定金額・お会計との一致は、変わりません)\n\nよろしいですか?`)) return;
+  const stamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  let done = 0;
+  for (const l of targets) {
+    const rate = issuedDisc[l.ticket_number].rate;
+    const note = [l.note, `管理者修正(${currentSession.user.email} ${stamp}): 取引先割引 ${rate}%(台帳どおり)`].filter(Boolean).join(' / ');
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/usage_log?id=eq.${Number(l.id)}`, { method: 'PATCH', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }), body: JSON.stringify({ discount_rate: rate, note }) });
+      const out = res.ok ? await res.json() : [];
+      if (res.ok && out.length) done++;
+    } catch (e) {}
+  }
+  showToast(`${done}件を確認済みにしました`, done === targets.length ? 'success' : 'error');
+  storeViewLoaded = false; await loadStoreView();
 }
 function openStoreDelete(id) {
   const r = storeRows.find(x => Number(x.log.id) === Number(id));
