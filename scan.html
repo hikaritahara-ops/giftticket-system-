@@ -296,10 +296,26 @@ let inputMethod = '手入力';
 const Y_MAX_DAYS = 31;
 function yMinDate() { return new Date(Date.parse(todayJST() + 'T00:00:00Z') - Y_MAX_DAYS * 86400000).toISOString().slice(0, 10); }
 function yDateOK(d) { return !!d && d >= yMinDate() && d <= todayJST(); }
+// 営業日: 日本時間の朝9時に切り替わる(朝5時までの営業で、締め作業が0時を過ぎても同じ日として扱うため)
+const DAY_ROLL_HOUR = 9;
 function todayJST() {
-  const j = new Date(Date.now() + 9 * 3600 * 1000);
+  const j = new Date(Date.now() + (9 - DAY_ROLL_HOUR) * 3600 * 1000);
   return j.toISOString().slice(0, 10);
 }
+// 開きっぱなしの画面でも、9時を過ぎたら日付の初期値と範囲を更新する
+let _lastBizDate = todayJST();
+function refreshBizDate() {
+  const now = todayJST();
+  if (now === _lastBizDate) return;
+  const prev = _lastBizDate; _lastBizDate = now;
+  [['used-date', true], ['y-date', false]].forEach(([id]) => {
+    const e = document.getElementById(id); if (!e) return;
+    if (e.value === prev) { e.value = now; e.dispatchEvent(new Event('change')); }
+    e.max = now; e.min = yMinDate();
+  });
+}
+setInterval(refreshBizDate, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBizDate(); });
 function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 function el(tag, props, children) {
@@ -884,7 +900,7 @@ async function exifDateOf(file) {
   } catch (e) {}
   return '';
 }
-function jstDateOf(ms) { return new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 10); }
+function jstDateOf(ms) { return new Date(ms + (9 - DAY_ROLL_HOUR) * 3600 * 1000).toISOString().slice(0, 10); }
 function amountFor(t, ncourse, staff, pcourse) {
   if (!TICKET_RE.test(t)) return null;
   const f = isNumOnly(t) ? PLAT_AMOUNT : PRICE[t[0]];
