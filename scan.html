@@ -1434,7 +1434,7 @@ $('y-save').addEventListener('click', () => {
       if (!up.path) { r.err = '写真の保存に失敗しました(' + up.err + ')。もう一度、記録を押してください。'; continue; }
       const { error } = await sb.from('yutai_usage_log').insert({
         ticket_number: r.ticket, store_name: store, used_date: r.date, course: '優待券',
-        input_method: '写真', photo_path: up.path, created_by: by
+        input_method: r.auto ? '撮影読取' : '手入力', photo_path: up.path, created_by: by
       });
       if (error) {
         r.err = (error.code === '23505' || /duplicate/i.test(error.message || '')) ? '⚠ この番号は、すでに記録されています(重複のため記録しません)。' : '記録できませんでした(' + (error.message || '').slice(0, 80) + ')';
