@@ -1327,7 +1327,7 @@ function exportStoreExcel() {
       '想定金額': l.expected_amount != null ? l.expected_amount : '',
       '入力方法': l.input_method || '',
       '記録日時': l.created_at ? new Date(l.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '',
-      '記録者': l.created_by || '',
+      '記録者': whoName(l.created_by, l.store_name),
       'お会計との突合': ({ ok: '一致', none: 'お会計なし', nodata: '未取込' })[r.pos] || '',
       '備考': l.note || '',
       'メモ': l.memo || '',
@@ -1528,9 +1528,13 @@ function isStoreAdmin() {
   return !!em && /@omotesandocapital\.com$/i.test(em);
 }
 // ============ メモ(なぜ手入力か・確認した内容)と、確認済みの印 ============
+// 記録した人の表示:店舗のIDは「店舗名」、管理部のIDは「管理者」(メールアドレスは、画面には出さない。マウスを乗せると見える)
+function isAdminEmail(em) { return /@omotesandocapital\.com$/i.test(String(em || '')); }
+function whoName(em, store) { return !em ? '' : isAdminEmail(em) ? '管理者' : (store || String(em).split('@')[0]); }
+function whoHtml(em, store) { return em ? `<span title="${escH(em)}">${escH(whoName(em, store))}</span>` : ''; }
 function memoStamp() { return new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
 function memoFieldsHtml(r, inp) {
-  const chkInfo = r.checked_at ? `<span style="color:var(--text3);font-size:.75rem">(${escH(r.checked_by || '')} ${escH(new Date(r.checked_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }))})</span>` : '';
+  const chkInfo = r.checked_at ? `<span style="color:var(--text3);font-size:.75rem">(${escH(whoName(r.checked_by, ''))} ${escH(new Date(r.checked_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }))})</span>` : '';
   return `<label style="font-size:.78rem;color:var(--text3)">メモ(なぜ手入力か・確認した内容など。追記すると、日時と記入者つきで、消えずに残ります)</label>` +
     (r.memo ? `<div style="white-space:pre-wrap;font-size:.8rem;line-height:1.5;background:rgba(255,255,255,.05);border-radius:8px;padding:8px;margin:4px 0;max-height:120px;overflow:auto">${escH(r.memo)}</div>` : '') +
     `<textarea id="mm-new" rows="2" placeholder="例:読み取れず、店舗が目視で入力。写真と一致を確認" style="${inp};margin-bottom:8px;resize:vertical"></textarea>` +
@@ -1553,7 +1557,7 @@ function computeAlerts() {
   const out = { manual: [], disc: [], pos: [] };
   storeRows.forEach(r => {
     const l = r.log; if (l.checked_at) return;
-    const base = { kind: 'gift', id: l.id, store: l.store_name, ticket: l.ticket_number, date: String(l.used_date || '').slice(0, 10), by: l.created_by || '', memo: l.memo };
+    const base = { kind: 'gift', id: l.id, store: l.store_name, ticket: l.ticket_number, date: String(l.used_date || '').slice(0, 10), by: whoName(l.created_by, l.store_name), memo: l.memo };
     if (l.input_method === '手入力') out.manual.push(base);
     const d = storeDiscInfo(l);
     if (d.sug && d.set !== d.sug.rate) out.disc.push(Object.assign({}, base, { detail: `台帳:${d.sug.rate}%OFF(${d.sug.sold_to || '販売先不明'}) → 記録:${d.set == null ? '未設定' : (d.set ? d.set + '%OFF' : '割引なし')}` }));
@@ -1561,7 +1565,7 @@ function computeAlerts() {
   });
   yutaiRows.forEach(r => {
     if (r.checked_at) return;
-    if (r.input_method === '手入力') out.manual.push({ kind: 'yutai', id: r.id, store: r.store_name, ticket: r.ticket_number, date: String(r.used_date || '').slice(0, 10), by: r.created_by || '', memo: r.memo, tag: '優待券' });
+    if (r.input_method === '手入力') out.manual.push({ kind: 'yutai', id: r.id, store: r.store_name, ticket: r.ticket_number, date: String(r.used_date || '').slice(0, 10), by: whoName(r.created_by, r.store_name), memo: r.memo, tag: '優待券' });
   });
   return out;
 }
@@ -1883,7 +1887,7 @@ function renderYutai() {
   else {
     const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
     body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr>${[['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','撮影日(利用日)'],['created_by','記録者'],['input_method','入力方法']].map(([k, t]) => sortTh('yutai', k, t)).join('')}<th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
-      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${yMethodBadge(r.input_method)}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button>${memoMark(r)} <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
+      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${whoHtml(r.created_by, r.store_name)}</td><td>${yMethodBadge(r.input_method)}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button>${memoMark(r)} <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
       '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">先頭の500件だけ表示しています。</div>' : '');
   }
   // POSの優待処理の明細
@@ -1902,7 +1906,7 @@ function exportYutaiExcel() {
   XLSX.utils.book_append_sheet(wb, ws1, '日付ごとの突合');
   const fs = document.getElementById('yutai-filter-store').value, fm = document.getElementById('yutai-filter-month').value;
   const rows = yutaiRows.filter(r => (!fs || (STORE_POS_MAPPING[r.store_name] || r.store_name) === fs) && (!fm || String(r.used_date).slice(0, 7) === fm));
-  const ws2 = XLSX.utils.json_to_sheet(rows.map(r => ({ '撮影日': String(r.used_date).slice(0, 10), '店舗': r.store_name, '券番号': r.ticket_number, '記録日時': r.created_at ? new Date(r.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '', '記録者': r.created_by || '', '入力方法': yMethodText(r.input_method), '備考': r.note || '', 'メモ': r.memo || '', '確認済み': r.checked_at ? '○' : '' })));
+  const ws2 = XLSX.utils.json_to_sheet(rows.map(r => ({ '撮影日': String(r.used_date).slice(0, 10), '店舗': r.store_name, '券番号': r.ticket_number, '記録日時': r.created_at ? new Date(r.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '', '記録者': whoName(r.created_by, r.store_name), '入力方法': yMethodText(r.input_method), '備考': r.note || '', 'メモ': r.memo || '', '確認済み': r.checked_at ? '○' : '' })));
   ws2['!cols'] = [12, 22, 14, 18, 28, 12, 30, 30, 10].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws2, '撮影した優待券');
   XLSX.writeFile(wb, `優待券_${fm || 'all'}.xlsx`);
