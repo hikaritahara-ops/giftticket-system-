@@ -1265,6 +1265,28 @@ async function matchStoreWithPos(logs) {
         if (hit) break;
       }
     }
+    // 3〜4枚の合計が、1行の会計と合う(例:A券×3 = 47,520円)
+    const tryCombo = (cand, size) => {
+      const go = (start, chosen, sums) => {
+        if (chosen.length === size) { for (const sm of sums) { if (pl.some(p => Number(p.sales_amount) === sm)) return { chosen, sm }; } return null; }
+        for (let i = start; i < cand.length; i++) {
+          const cs = posCandidates(cand[i].log), ns = [];
+          sums.forEach(x => cs.forEach(c => ns.push(x + c)));
+          const r = go(i + 1, chosen.concat(cand[i]), ns); if (r) return r;
+        }
+        return null;
+      };
+      return go(0, [], [0]);
+    };
+    for (const size of [3, 4]) {
+      for (;;) {
+        const cand = rows.filter(r => r.pos !== 'ok');
+        if (cand.length < size || cand.length > 14) break;
+        const hit = tryCombo(cand, size);
+        if (!hit) break;
+        take(hit.sm); hit.chosen.forEach(r => { r.pos = 'ok'; });
+      }
+    }
     // 1枚が、2行に分かれている(例:90,000円 = 45,000円×2、194,000円 = 122,000円 + 72,000円)
     rows.forEach(r => {
       if (r.pos === 'ok') return;
