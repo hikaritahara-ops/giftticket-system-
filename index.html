@@ -1181,6 +1181,7 @@ async function loadStoreView() {
     msel.value = months.includes(curM) ? curM : '';
     renderStoreView();
     updateBell();
+    loadDbUsage();
   } catch (e) {
     body.innerHTML = '<div class="hint" style="color:var(--danger)">読み込みに失敗しました(' + escH(e.message) + ')。ログインし直して、「再読み込み」を押してください。</div>';
   }
@@ -1575,6 +1576,15 @@ function memoUpdate(r) {
 function memoMark(r) { return r.memo ? ` <span title="${escH(r.memo)}" style="cursor:help">📝</span>` : ''; }
 
 // ============ 🔔 確認が必要なもの(手入力・割引が反映されていない券・お会計と合わない券) ============
+const DB_WARN_MB = 400, DB_LIMIT_MB = 500;
+let dbUsageMB = null;
+async function loadDbUsage() {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/admin_db_size_mb`, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }), body: '{}' });
+    if (res.ok) { const v = Number(await res.json()); dbUsageMB = isNaN(v) ? null : v; }
+  } catch (e) {}
+  updateBell();
+}
 function computeAlerts() {
   const out = { manual: [], disc: [], pos: [] };
   storeRows.forEach(r => {
@@ -1593,7 +1603,7 @@ function computeAlerts() {
 }
 function updateBell() {
   const el = document.getElementById('bell-count'); if (!el) return;
-  const a = computeAlerts(), n = a.manual.length + a.disc.length + a.pos.length;
+  const a = computeAlerts(), n = a.manual.length + a.disc.length + a.pos.length + (dbUsageMB != null && dbUsageMB >= DB_WARN_MB ? 1 : 0);
   el.textContent = n > 99 ? '99+' : String(n); el.style.display = n ? 'block' : 'none';
 }
 function openAlerts() {
@@ -1604,6 +1614,7 @@ function openAlerts() {
     return `<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:2px"><b style="font-size:.95rem">${title}</b><span style="color:${list.length ? 'var(--danger)' : 'var(--ok)'};font-weight:700">${list.length}件</span>${list.length ? `<button class="btn-small" style="margin-left:auto" onclick="bulkCheckAlerts('${key}')">全部、確認済みにする</button>` : ''}</div><div style="color:var(--text3);font-size:.75rem;margin-bottom:4px">${hint}</div>${rows || '<div style="color:var(--ok);font-size:.82rem">確認が必要なものはありません</div>'}${list.length > 100 ? '<div class="hint">先頭の100件だけ表示しています。</div>' : ''}</div>`;
   };
   openStoreModal(`<h3 style="margin:0 0 4px;font-size:1rem">🔔 確認が必要なもの</h3><div style="color:var(--text3);font-size:.75rem;margin-bottom:12px">「開く」で、修正の画面が開きます。メモを書いて「確認済み」にすると、ここから消えます。</div>` +
+    (dbUsageMB != null && dbUsageMB >= DB_WARN_MB ? `<div style="margin-bottom:16px;padding:10px;border:1px solid var(--danger);border-radius:8px;font-size:.85rem"><b>⚠ データベースの容量が、${dbUsageMB}MB になりました</b><div style="color:var(--text3);font-size:.75rem;margin-top:4px">無料プランの上限は${DB_LIMIT_MB}MBです(超えると、新しい記録が保存できなくなります)。早めに、有料プランへの切り替えか、古いデータの整理を検討してください。</div></div>` : '') +
     sec('manual', '手入力された券', '写真から読み取らず、手で入力された券(なぜ手入力かを、メモに残せます)') +
     sec('disc', '割引の券なのに、割引が反映されていない', '台帳に取引先販売の割引がある券で、記録の割引が違う・未設定のもの') +
     sec('pos', 'お会計(POS)と合わない券', 'お会計のデータがある日で、同じ店舗・日・金額の会計が見つからない券') +
