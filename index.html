@@ -1767,6 +1767,9 @@ function renderYutaiCoverage() {
   box.innerHTML = `<div class="hint"><b>${Y}年${M}月</b>:未撮影の日は、全体で <b style="color:var(--danger)">${totalUn}日分 / ${totalN}枚</b>。 ✓=POSと枚数が一致 / △=枚数が違う / <span style="color:var(--danger);font-weight:700">未</span>=POSに優待の処理あり・撮影なし / ○=撮影あり(POSは未取込) / 撮=撮影はあるがPOSに優待の処理なし / ·=なし。マスにカーソルを置くと詳細が出ます。</div>` +
     `<div class="table-scroll"><table style="font-size:0.78rem"><thead><tr>${head}</tr></thead><tbody>${rowsHtml}</tbody></table></div>`;
 }
+// 優待券の入力方法。「写真」は、記録し分ける前の古い記録(読み取りか手入力か不明)
+function yMethodText(m) { return m === '撮影読取' ? '撮影読取' : m === '手入力' ? '手入力' : '不明(旧)'; }
+function yMethodBadge(m) { return m === '手入力' ? '<span class="badge badge-warn">手入力</span>' : escH(yMethodText(m)); }
 function renderYutai() {
   renderYutaiCoverage();
   const { list, rev, lastPos } = yutaiCompute();
@@ -1793,8 +1796,8 @@ function renderYutai() {
   if (!rows.length) body.innerHTML = '<div class="hint">撮影した優待券は、まだありません。</div>';
   else {
     const ts = (t) => { try { return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
-    body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr>${[['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','撮影日(利用日)'],['created_by','記録者']].map(([k, t]) => sortTh('yutai', k, t)).join('')}<th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
-      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button> <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
+    body.innerHTML = `<div class="hint">${rows.length}件</div><div class="table-scroll"><table><thead><tr>${[['created_at','記録日時'],['store_name','店舗'],['ticket_number','券番号'],['used_date','撮影日(利用日)'],['created_by','記録者'],['input_method','入力方法']].map(([k, t]) => sortTh('yutai', k, t)).join('')}<th>券の写真</th>${isStoreAdmin() ? '<th>管理(修正・削除)</th>' : ''}</tr></thead><tbody>` +
+      rows.slice(0, 500).map(r => `<tr><td>${escH(ts(r.created_at))}</td><td>${escH(r.store_name)}</td><td style="font-family:monospace">${escH(r.ticket_number)}</td><td>${escH(String(r.used_date).slice(0, 10))}</td><td>${escH(r.created_by || '')}</td><td>${yMethodBadge(r.input_method)}</td><td>${r.photo_path ? `<button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="viewTicketPhoto(this.dataset.photo, this.dataset.name)">📷 見る</button> <button class="btn-small" data-photo="${escH(r.photo_path)}" data-name="${escH(photoFileName(r))}" onclick="downloadTicketPhoto(this.dataset.photo, this.dataset.name)" title="この写真を保存">⬇ 保存</button>` : '-'}</td>${isStoreAdmin() ? `<td style="white-space:nowrap"><button class="btn-small" onclick="openYutaiEdit(${Number(r.id)})">✏️ 修正</button> <button class="btn-small" onclick="openYutaiDelete(${Number(r.id)})">🗑 削除</button></td>` : ''}</tr>`).join('') +
       '</tbody></table></div>' + (rows.length > 500 ? '<div class="hint">先頭の500件だけ表示しています。</div>' : '');
   }
   // POSの優待処理の明細
@@ -1813,8 +1816,8 @@ function exportYutaiExcel() {
   XLSX.utils.book_append_sheet(wb, ws1, '日付ごとの突合');
   const fs = document.getElementById('yutai-filter-store').value, fm = document.getElementById('yutai-filter-month').value;
   const rows = yutaiRows.filter(r => (!fs || (STORE_POS_MAPPING[r.store_name] || r.store_name) === fs) && (!fm || String(r.used_date).slice(0, 7) === fm));
-  const ws2 = XLSX.utils.json_to_sheet(rows.map(r => ({ '撮影日': String(r.used_date).slice(0, 10), '店舗': r.store_name, '券番号': r.ticket_number, '記録日時': r.created_at ? new Date(r.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '', '記録者': r.created_by || '', '備考': r.note || '' })));
-  ws2['!cols'] = [12, 22, 14, 18, 28, 30].map(w => ({ wch: w }));
+  const ws2 = XLSX.utils.json_to_sheet(rows.map(r => ({ '撮影日': String(r.used_date).slice(0, 10), '店舗': r.store_name, '券番号': r.ticket_number, '記録日時': r.created_at ? new Date(r.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '', '記録者': r.created_by || '', '入力方法': yMethodText(r.input_method), '備考': r.note || '' })));
+  ws2['!cols'] = [12, 22, 14, 18, 28, 12, 30].map(w => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, ws2, '撮影した優待券');
   XLSX.writeFile(wb, `優待券_${fm || 'all'}.xlsx`);
   showToast('Excelを出力しました', 'success');
