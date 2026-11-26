@@ -1163,8 +1163,8 @@ async function loadStoreView() {
     const logs = await fetchPaged('usage_log?select=*&order=created_at.desc,id.desc');     // 1000件を超えても、全件読む
     storeRows = logs.map(l => ({ log: l, photo: null, pos: 'nodata' }));
     try {   // 台帳に割引の記載がある券(取引先に販売した分)
-      const rd = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=ticket_number,discount_rate,sold_to&discount_rate=not.is.null&limit=5000`, { headers: sbHeaders() });
-      issuedDisc = {}; if (rd.ok) (await rd.json()).forEach(x => { issuedDisc[x.ticket_number] = { rate: Number(x.discount_rate), sold_to: x.sold_to || '' }; });
+      issuedDisc = {};   // 取引先販売の割引は、管理者しか読めない専用の表にある
+      (await fetchPaged('ticket_partner_discounts?select=ticket_number,discount_rate,sold_to&order=ticket_number.asc')).forEach(x => { issuedDisc[x.ticket_number] = { rate: Number(x.discount_rate), sold_to: x.sold_to || '' }; });
     } catch (e) { issuedDisc = {}; }
     await matchStoreWithPos(logs);
     storeViewLoaded = true;
@@ -2884,7 +2884,7 @@ function parseLedgerSheet(rows) {
       if (!who) continue;      // 出庫されていない券
       const m = who.match(/(\d+)\s*[%％]\s*(?:OFF|ＯＦＦ|引)/i);
       const rate = m && (m[1] === '10' || m[1] === '20') ? Number(m[1]) : null;
-      out.push({ ticket_number: no, course: no[0], issued_date: ticketToIsoDate(row[c + 1]), destination: who, sold_to: rate ? who : null, discount_rate: rate });
+      out.push({ ticket_number: no, course: no[0], issued_date: ticketToIsoDate(row[c + 1]), destination: rate ? '取引先販売' : who, sold_to: rate ? who : null, discount_rate: rate });
     }
   }
   return out;
@@ -2904,18 +2904,20 @@ async function handleLedgerFile(file, wb0) {
     }
     if (!issued) { document.getElementById('ledger-stats').innerHTML = ''; alert('ギフチケの台帳(「No.」「出庫日」「期限日」「出庫者」の列があるシート)が見つかりませんでした。\n見つかったタブ: ' + wb.SheetNames.join(', ')); card.style.display = 'none'; return; }
     // いま、システムにある券
-    const have = new Map();
+    const haveIssued = new Set();     // 発券の台帳にある券番号
+    const have = new Map();           // 券番号 → 割引(管理者専用の表)
     let from = 0;
     while (true) {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=ticket_number,discount_rate,sold_to&order=ticket_number.asc`, { headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + 999}` }) });
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?select=ticket_number&order=ticket_number.asc`, { headers: sbHeaders({ 'Range-Unit': 'items', 'Range': `${from}-${from + 999}` }) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const part = await res.json(); part.forEach(x => have.set(x.ticket_number, x));
+      const part = await res.json(); part.forEach(x => haveIssued.add(x.ticket_number));
       if (part.length < 1000) break; from += 1000;
     }
+    (await fetchPaged('ticket_partner_discounts?select=ticket_number,discount_rate,sold_to&order=ticket_number.asc')).forEach(x => have.set(x.ticket_number, x));
     const seen = new Set(), dedup = [];
     issued.forEach(r => { if (!seen.has(r.ticket_number)) { seen.add(r.ticket_number); dedup.push(r); } });
     const disc = dedup.filter(r => r.discount_rate);
-    const plan = { upd: [], add: [], same: 0, other: dedup.filter(r => !r.discount_rate && !have.has(r.ticket_number)), gone: 0 };
+    const plan = { upd: [], add: [], same: 0, other: dedup.filter(r => !r.discount_rate && !haveIssued.has(r.ticket_number)), gone: 0, newIssued: dedup.filter(r => r.discount_rate && !haveIssued.has(r.ticket_number)) };
     disc.forEach(r => {
       const h = have.get(r.ticket_number);
       if (!h) plan.add.push(r);
@@ -2945,12 +2947,12 @@ document.getElementById('ledger-go-btn').addEventListener('click', async () => {
   if (!ledgerPlan) return;
   const btn = document.getElementById('ledger-go-btn'), log = document.getElementById('ledger-log');
   btn.disabled = true; btn.textContent = '登録中...'; log.style.display = 'block'; log.innerHTML = '';
-  const post = async (label, rows, prefer) => {
+  const post = async (label, rows, prefer, table) => {
     let ok = 0, ng = 0;
     for (let i = 0; i < rows.length; i += 300) {
       const b = rows.slice(i, i + 300);
       try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/issued_tickets?on_conflict=ticket_number`, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': prefer + ',return=minimal' }), body: JSON.stringify(b) });
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table || 'issued_tickets'}?on_conflict=ticket_number`, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json', 'Prefer': prefer + ',return=minimal' }), body: JSON.stringify(b) });
         if (res.ok) ok += b.length; else { ng += b.length; log.innerHTML += `<div class="err-line">✗ ${label} ${i + 1}〜: エラー(${res.status}) ${escH((await res.text()).slice(0, 120))}</div>`; }
       } catch (e) { ng += b.length; log.innerHTML += `<div class="err-line">✗ ${label}: ${escH(e.message)}</div>`; }
     }
@@ -2958,9 +2960,11 @@ document.getElementById('ledger-go-btn').addEventListener('click', async () => {
     return ng;
   };
   let ng = 0;
-  // 割引だけを更新(コース・出庫日・出庫先など、ほかの項目は、そのまま)
-  if (ledgerPlan.upd.length) ng += await post('割引の更新', ledgerPlan.upd.map(r => ({ ticket_number: r.ticket_number, sold_to: r.sold_to, discount_rate: r.discount_rate })), 'resolution=merge-duplicates');
-  if (ledgerPlan.add.length) ng += await post('割引のある券の新規追加', ledgerPlan.add.map(r => ({ ticket_number: r.ticket_number, course: r.course, issued_date: r.issued_date, destination: r.destination, sold_to: r.sold_to, discount_rate: r.discount_rate })), 'resolution=ignore-duplicates');
+  // 発券の台帳に、まだない券は、先に追加する(出庫先は「取引先販売」とだけ入れる。販売先の名前と割引率は、管理者専用の別の表に入れる)
+  if (ledgerPlan.newIssued.length) ng += await post('発券の台帳への追加(取引先販売の券)', ledgerPlan.newIssued.map(r => ({ ticket_number: r.ticket_number, course: r.course, issued_date: r.issued_date, destination: '取引先販売' })), 'resolution=ignore-duplicates');
+  const nowIso = new Date().toISOString();
+  const discRows = ledgerPlan.add.concat(ledgerPlan.upd).map(r => ({ ticket_number: r.ticket_number, sold_to: r.sold_to, discount_rate: r.discount_rate, updated_at: nowIso }));
+  if (discRows.length) ng += await post('取引先販売の割引の登録・更新(管理者専用)', discRows, 'resolution=merge-duplicates', 'ticket_partner_discounts');
   if (document.getElementById('ledger-addall').checked && ledgerPlan.other.length) ng += await post('割引のない券の追加', ledgerPlan.other.map(r => ({ ticket_number: r.ticket_number, course: r.course, issued_date: r.issued_date, destination: r.destination })), 'resolution=ignore-duplicates');
   btn.textContent = ng ? '一部失敗しました' : '完了しました';
   if (!ng) { showToast('台帳の割引を登録しました', 'success'); storeViewLoaded = false; }
